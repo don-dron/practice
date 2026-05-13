@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-from PIL import Image
 import torch
+import torch.nn.functional as F
+from PIL import Image
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
 
@@ -85,9 +86,70 @@ class COCOLinesDataset(Dataset):
         out_w = tens.shape[-1]
         return tens, out_w
 
+    def _decode_crop_resize_torchvision(self, img_path: Path, bbox: Tuple[float, float, float, float]) -> Optional[Tuple[torch.Tensor, int]]:
+        """JPEG/PNG через torch (decodeJPEG), без PIL если нет аугментаций — ниже простой нагрузке CPU."""
+        try:
+            from torchvision.io import read_image
+        except Exception:
+            return None
+        try:
+            chw = read_image(str(img_path))
+        except Exception:
+            return None
+        if chw.dtype != torch.uint8 or chw.dim() != 3:
+            return None
+        ch = int(chw.shape[0])
+        if ch == 4:
+            chw = chw[:3]
+        elif ch not in (1, 3):
+            return None
+        H, W = int(chw.shape[1]), int(chw.shape[2])
+        x, y, bw, bh = _bbox_clip(*bbox, W, H)
+        if bw < float(self.min_crop_width):
+            bw = float(self.min_crop_width)
+            if x + bw > W:
+                x = float(max(0, W - self.min_crop_width))
+        left = int(x)
+        top = int(y)
+        right = int(x + bw)
+        bottom = int(y + bh)
+        left = max(0, min(left, max(0, W - 1)))
+        top = max(0, min(top, max(0, H - 1)))
+        right = max(left + 1, min(W, right))
+        bottom = max(top + 1, min(H, bottom))
+        sl = chw[:, top:bottom, left:right]
+        if sl.numel() == 0:
+            return None
+        x01 = sl.float().div_(255.0)
+        if sl.shape[0] == 3:
+            gray = 0.2989 * x01[0:1] + 0.5870 * x01[1:2] + 0.1140 * x01[2:3]
+        else:
+            gray = x01
+        _, hi, wi_src = gray.shape
+        new_w = max(1, round(float(wi_src) * float(self.img_height) / float(hi)))
+        if self.max_width is not None:
+            new_w = min(new_w, int(self.max_width))
+        out = F.interpolate(
+            gray.unsqueeze(0),
+            size=(self.img_height, new_w),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+        out = out.mul_(2.0).sub_(1.0)
+        return out, new_w
+
     def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, str]]:
         fname, text, bbox = self.samples[idx]
         img_path = self.image_root / fname
+        if self.train_augment is None:
+            tv = self._decode_crop_resize_torchvision(img_path, bbox)
+            if tv is not None:
+                tens, out_w = tv
+                return {
+                    "image": tens.contiguous(),
+                    "width": torch.tensor(out_w, dtype=torch.long),
+                    "text": text,
+                }
         pil = Image.open(img_path).convert("RGB")
         W, H = pil.size
         x, y, w, h = _bbox_clip(*bbox, W, H)
