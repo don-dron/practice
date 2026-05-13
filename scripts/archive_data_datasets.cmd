@@ -102,9 +102,12 @@ for %%D in (digital_peter russian_old_orthography_ocr yenisei_gov_reports_td) do
     exit /b 1
   )
   if exist "%ROOT%\data\%%D" rd /s /q "%ROOT%\data\%%D"
-  move "!TMPD!\%%D" "%ROOT%\data\" >nul
-  if errorlevel 1 (
-    echo Ошибка при переносе %%D в data\
+  mkdir "%ROOT%\data" 2>nul
+  REM move между дисками ^(например TEMP на C:, репо на D:^) падает — robocopy /MOVE работает везде.
+  robocopy "!TMPD!\%%D" "%ROOT%\data\%%D" /E /MOVE /R:2 /W:2 /NFL /NDL /NJH /NJS /nc /ns /np
+  set "RO=!errorlevel!"
+  if !RO! GEQ 8 (
+    echo Ошибка robocopy при переносе %%D в data\ ^(код !RO!, см. сообщения robocopy^).
     rd /s /q "!TMPD!" 2>nul
     exit /b 1
   )
