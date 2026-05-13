@@ -48,12 +48,28 @@ exit /b 0
 set "DOWN=%ROOT%\archive.tar.gz"
 
 echo Получение прямой ссылки с Яндекс.Диска...
-set "HREF="
-for /f "delims=" %%U in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "(Invoke-RestMethod '%META_URL%').href"') do set "HREF=%%U"
-if "!HREF!"=="" (
-  echo Ошибка: в ответе API нет href.
+REM Как в archive_data_datasets.sh: метаданные — через curl (.json во временный файл).
+REM Invoke-RestMethod с public_key=https://… ломался на некоторых системах URL-парсером.
+set "JS=%TEMP%\practice_yndx_meta_%RANDOM%.json"
+curl.exe -fsS "%META_URL%" -o "!JS!"
+if errorlevel 1 (
+  echo Ошибка: запрос метаданных к API Яндекс.Диска ^(curl^).
+  del "!JS!" 2>nul
   exit /b 1
 )
+set "META_JSON=!JS!"
+set "HREF="
+for /f "delims=" %%U in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $p = $Env:META_JSON; if ([string]::IsNullOrWhiteSpace($p)) { exit 11 }; $t = Get-Content -LiteralPath $p -Raw -Encoding utf8; $o = ConvertFrom-Json $t -ErrorAction Stop; $h = $o.href; if ($null -eq $h) { exit 11 }; if (($h -is [string]) -and [string]::IsNullOrWhiteSpace($h)) { exit 11 }; Write-Output $h }"') do set "HREF=%%U"
+if "!HREF!"=="" (
+  echo Ошибка: в ответе API нет href. Первые символы ответа:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $p = $Env:META_JSON; if (![string]::IsNullOrWhiteSpace($p) -and (Test-Path -LiteralPath $p)) { $t = Get-Content -LiteralPath $p -Raw -Encoding utf8; if ($t.Length -gt 350) { $t = $t.Substring(0,350) }; $t } }" 2>nul
+  echo ^(сообщите преподавателю, если здесь виден HTML/XML вместо JSON.^)
+  set "META_JSON="
+  del "!JS!" 2>nul
+  exit /b 1
+)
+set "META_JSON="
+del "!JS!" 2>nul
 
 echo Загрузка архива...
 curl.exe -fsSL "!HREF!" -o "!DOWN!"
