@@ -115,17 +115,21 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 9) Все связки регистра §5.1 подряд (T0, E1, E1*, E2, S2–S5) на CUDA
 ---------------------------------------------------------------------
-В активированном .venv, из корня репозитория (cmd.exe):
+Из корня репозитория в cmd.exe (venv можно не активировать — скрипт возьмёт `.venv\Scripts\python.exe`, при отсутствии попытается создать `.venv`):
 
 scripts\train_registry_all.cmd --device cuda
 
-По умолчанию, если аргументов нет, скрипт сам подставляет --device cuda.
+По умолчанию при пустых аргументах подставляется `--device cuda`.
 
-Если torch.cuda.is_available=False, скрипт завершится кодом 2 с подсказкой по PyTorch+CUDA. Намеренно на CPU: set TRAIN_REGISTRY_ALLOW_CPU=1 или --device cpu.
+Перед первым запуском на GPU скрипт сам выполняет: `pip install -U pip`, `pip install -e .` в выбранный интерпретатор; если `torch.cuda.is_available` всё равно ложь — переустанавливает PyTorch из колёс **cu124**, затем **cu121** (нужен интернет).
 
-Снимки каждой модели сохраняются в папку training\registry_snapshots\ (файлы вида T0_latest.pt, E1_latest.pt, …), чтобы поток прогонов не затирал последний чекпоинт.
+Отключить автоматический pip/cu-колёса: `set TRAIN_REGISTRY_SKIP_CUDA_PIP=1`. Свой интерпретатор Python: `set TRAIN_REGISTRY_PYTHON=C:\полный\путь\python.exe`.
 
-Опционально из cmd до вызова задать переменные окружения (эквивалент bash):
+После попытки bootstrap, если CUDA по-прежнему недоступна: код выхода **3**. Ошибка на шаге pip (например, нет сети) при bootstrap — код **4**. Намеренно только CPU без проверки GPU: `set TRAIN_REGISTRY_ALLOW_CPU=1` или `--device cpu`.
+
+Снимки каждой модели сохраняются в папку `training\registry_snapshots\` (файлы вида `T0_latest.pt`, `E1_latest.pt`, …), чтобы поток прогонов не затирал последний чекпоинт.
+
+Опционально из cmd до вызова задать переменные окружения:
 
 set TRAIN_REGISTRY_EPOCHS=1
 
@@ -133,7 +137,7 @@ set TRAIN_REGISTRY_BATCH=8
 
 scripts\train_registry_all.cmd --device cuda
 
-Полный бюджет эпох берётся из YAML, если не задано TRAIN_REGISTRY_EPOCHS. Для связки S5 при первом запуске может потребоваться загрузка весов ResNet (нужен интернет, пока кэш torchvision пуст).
+Полный бюджет эпох берётся из YAML, если не задано `TRAIN_REGISTRY_EPOCHS`. Для связки S5 при первом запуске может потребоваться загрузка весов ResNet (нужен интернет, пока кэш torchvision пуст).
 
 
 11) Скачивание данных на Windows (без Git Bash)
