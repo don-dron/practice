@@ -15,6 +15,7 @@ cd /d "%~dp0"
 cd /d ".."
 set "REPO_ROOT=%CD%"
 set "PYTHONPATH=%REPO_ROOT%\src"
+set "TRPROBE=%~dp0train_registry_torch_probe.py"
 
 REM ---- Interpreter: .venv preferred ----
 set "EXE_PY="
@@ -54,18 +55,19 @@ if errorlevel 1 goto gpu_wants_cuda
 goto after_gpu_cuda_bootstrap
 
 :gpu_wants_cuda
-if defined TRAIN_REGISTRY_SKIP_CUDA_PIP goto after_ensure_torch_cuda
+if defined TRAIN_REGISTRY_SKIP_CUDA_PIP goto after_torch_continue
 call :ensure_torch_cuda "!EXE_PY!"
-if errorlevel 2 (
-  echo [train_registry] CUDA not usable: torch.cuda.is_available is False after cu124/cu121. See hints above ^(GPU/driver^?). Use --device cpu or TRAIN_REGISTRY_ALLOW_CPU=1.
-  exit /b 5
-)
-if errorlevel 1 (
-  echo [train_registry] pip / venv bootstrap failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for verbose pip^).
-  exit /b 4
-)
-:after_ensure_torch_cuda
-"!EXE_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py" short
+if errorlevel 2 goto tr_cuda_unreachable_after_call
+if errorlevel 1 goto tr_bootstrap_failed_after_call
+goto after_torch_continue
+:tr_cuda_unreachable_after_call
+echo [train_registry] CUDA not usable: torch.cuda.is_available is False after cu124/cu121. See hints above ^(GPU/driver^?). Use --device cpu or TRAIN_REGISTRY_ALLOW_CPU=1.
+exit /b 5
+:tr_bootstrap_failed_after_call
+echo [train_registry] pip / venv bootstrap failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for verbose pip^).
+exit /b 4
+:after_torch_continue
+"!EXE_PY!" "!TRPROBE!" short
 if errorlevel 1 goto cuda_still_bad_after_verify
 goto after_gpu_cuda_bootstrap
 
@@ -140,33 +142,42 @@ if defined TRAIN_REGISTRY_PIP_QUIET set "_PIPEXTRA=-q"
 echo [train_registry] Using: "!_PY!"
 echo [train_registry] Step: ensure pip module
 "!_PY!" -m pip --version >nul 2>&1
-if errorlevel 1 (
-  echo [train_registry] pip missing - running ensurepip...
-  "!_PY!" -m ensurepip --upgrade
-  if errorlevel 1 (
-    echo [train_registry] ensurepip failed - reinstall Python with pip / use py -3.11 -m venv .venv
-    exit /b 1
-  )
-)
+if errorlevel 1 goto ecc_run_ensurepip
+goto ecc_after_ensurepip
+
+:ecc_run_ensurepip
+echo [train_registry] pip missing - running ensurepip...
+"!_PY!" -m ensurepip --upgrade
+if errorlevel 1 goto ecc_ensurepip_fail
+goto ecc_after_ensurepip
+:ecc_ensurepip_fail
+echo [train_registry] ensurepip failed - reinstall Python with pip / use py -3.11 -m venv .venv
+exit /b 1
+:ecc_after_ensurepip
+
 echo [train_registry] Step: pip install -U pip
 "!_PY!" -m pip install %_PIPEXTRA% -U pip
-if errorlevel 1 (
-  echo [train_registry] pip upgrade failed.
-  exit /b 1
-)
+if errorlevel 1 goto ecc_pip_up_fail
+goto ecc_after_pip_up
+:ecc_pip_up_fail
+echo [train_registry] pip upgrade failed.
+exit /b 1
+:ecc_after_pip_up
 
 echo [train_registry] Step: pip uninstall practice-htr ^(clean editable metadata^)
 "!_PY!" -m pip uninstall -y practice-htr 2>nul
 
 echo [train_registry] Step: pip install -e repo ^(dependencies^)
 "!_PY!" -m pip install %_PIPEXTRA% -e "%REPO_ROOT%"
-if errorlevel 1 (
-  echo [train_registry] pip install -e . failed ^(offline^? deps^? Python version^?)
-  exit /b 1
-)
+if errorlevel 1 goto ecc_editable_fail
+goto ecc_after_editable
+:ecc_editable_fail
+echo [train_registry] pip install -e . failed offline or missing deps or bad Python version
+exit /b 1
+:ecc_after_editable
 
 echo [train_registry] Step: probe torch CUDA
-"!_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py"
+"!_PY!" "!TRPROBE!"
 set "_TOR_PROBE=%ERRORLEVEL%"
 if "!_TOR_PROBE!"=="0" exit /b 0
 
@@ -175,40 +186,52 @@ echo [train_registry] torch without working CUDA - reinstalling GPU wheels (cu12
 "!_PY!" -m pip uninstall -y torch torchvision torchaudio 2>nul
 echo [train_registry] Step: pip torch cu124
 "!_PY!" -m pip install %_PIPEXTRA% --upgrade-strategy eager torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-if errorlevel 1 (
-  echo [train_registry] cu124 wheel install failed ^(network/url^?)
-)
+if errorlevel 1 goto ecc_cu124_warn
+goto ecc_after_cu124_warn
+:ecc_cu124_warn
+echo [train_registry] cu124 wheel install failed network or URL
+:ecc_after_cu124_warn
+
 echo [train_registry] Step: probe after cu124
-"!_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py" short
+"!_PY!" "!TRPROBE!" short
 set "_TOR_PROBE=%ERRORLEVEL%"
-if "!_TOR_PROBE!"=="0" (
-  echo [train_registry] OK: CUDA after cu124
-  exit /b 0
-)
+if "!_TOR_PROBE!"=="0" goto ecc_ok_cu124
+goto ecc_after_cu124_probe
+:ecc_ok_cu124
+echo [train_registry] OK: CUDA after cu124
+exit /b 0
+:ecc_after_cu124_probe
 
 echo [train_registry] Retrying CUDA wheels with cu121...
 "!_PY!" -m pip uninstall -y torch torchvision torchaudio 2>nul
 echo [train_registry] Step: pip torch cu121
 "!_PY!" -m pip install %_PIPEXTRA% --upgrade-strategy eager torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-if errorlevel 1 (
-  echo [train_registry] cu121 wheel install failed.
-  exit /b 1
-)
+if errorlevel 1 goto ecc_cu121_install_fail
+goto ecc_after_cu121_install
+:ecc_cu121_install_fail
+echo [train_registry] cu121 wheel install failed.
+exit /b 1
+:ecc_after_cu121_install
+
 echo [train_registry] Step: probe after cu121
-"!_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py" short
+"!_PY!" "!TRPROBE!" short
 set "_TOR_PROBE=%ERRORLEVEL%"
-if "!_TOR_PROBE!"=="0" (
-  echo [train_registry] OK: CUDA after cu121
-  exit /b 0
-)
+if "!_TOR_PROBE!"=="0" goto ecc_ok_cu121
+goto ecc_after_cu121_probe
+:ecc_ok_cu121
+echo [train_registry] OK: CUDA after cu121
+exit /b 0
+:ecc_after_cu121_probe
+
 echo [train_registry] Still no CUDA from PyTorch on this interpreter.
 echo [train_registry] nvidia-smi ^(driver / GPU in PATH^):
 where nvidia-smi >nul 2>&1
-if errorlevel 1 (
-  echo [train_registry] nvidia-smi not found - no driver, VM without GPU passthrough, or wrong machine account.
-) else (
-  nvidia-smi -L
-)
+if errorlevel 1 goto ecc_no_nvsmi
+nvidia-smi -L
+goto ecc_nvsmi_done
+:ecc_no_nvsmi
+echo [train_registry] nvidia-smi not found - no driver, VM without GPU passthrough, or wrong machine account.
+:ecc_nvsmi_done
 exit /b 2
 
 :err
