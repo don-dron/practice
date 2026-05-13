@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sys
 
 import torch
@@ -181,10 +182,22 @@ def run_training(cfg: dict) -> None:
 
     nw_requested = int(dc.get("num_workers", 0))
     nw = max(0, nw_requested)
-    # Windows: many workers + spawn() = slow / fragile (each worker imports torch).
-    if sys.platform == "win32" and nw > 8:
-        print(f"[htr-train] num_workers: YAML asked {nw}, capping at 8 on Windows")
-        nw = 8
+    # Windows: more workers -> more CPU for decode/collate; each worker imports torch (RAM grows).
+    if sys.platform == "win32":
+        _cap_raw = os.environ.get("HTR_WIN_MAX_NUM_WORKERS", "").strip()
+        if _cap_raw != "0":
+            _cap = 12
+            if _cap_raw != "":
+                try:
+                    _cap = max(1, min(32, int(_cap_raw)))
+                except ValueError:
+                    pass
+            if nw > _cap:
+                print(
+                    f"[htr-train] num_workers: YAML asked {nw}, capping at {_cap} on Windows "
+                    f"(raise: larger YAML num_workers / set HTR_WIN_MAX_NUM_WORKERS=N; disable cap: =0)"
+                )
+                nw = _cap
     bs = int(cfg["training"]["batch_size"])
 
     loader_train = DataLoader(
