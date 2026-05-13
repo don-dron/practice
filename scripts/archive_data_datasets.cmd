@@ -7,7 +7,7 @@ REM   scripts\archive_data_datasets.cmd fetch
 REM   scripts\archive_data_datasets.cmd pack
 
 setlocal EnableExtensions EnableDelayedExpansion
-cd /d "%~dp0.."
+cd /d "%~dp0\.."
 set "ROOT=%CD%"
 set "ACTION=%~1"
 if "%ACTION%"=="" set "ACTION=pack"

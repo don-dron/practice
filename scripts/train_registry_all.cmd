@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
-REM Full registry section 5.1 sequence: T0, E1, E1*, E2, S2..S5.
+REM Full registry section 5.1 sequence: T0, E1, E1*, E2, S2 to S5.
 REM From repo root:  scripts\train_registry_all.cmd --device cuda
 REM Snapshots: training\registry_snapshots\<tag>_latest.pt
 REM
@@ -11,7 +11,7 @@ REM Allow CPU-only run without pip: set TRAIN_REGISTRY_ALLOW_CPU=1 ^|^| pass --d
 REM Quieter pip: set TRAIN_REGISTRY_PIP_QUIET=1  ^(adds -q^)
 REM Exit codes from :ensure_torch_cuda: 0 OK, 1 pip/venv failure, 2 CUDA false after wheels
 
-cd /d "%~dp0.."
+cd /d "%~dp0\.."
 set "REPO_ROOT=%CD%"
 set "PYTHONPATH=%REPO_ROOT%\src"
 
@@ -159,7 +159,7 @@ if errorlevel 1 (
 )
 
 echo [train_registry] Step: probe torch CUDA
-"!_PY!" -c "import sys,torch;t=torch;v=t.__version__;c=t.cuda.is_available();vc=getattr(t.version,'cuda',None);print('torch',v,'cuda.is_available=',c);print('torch.version.cuda',vc or '(none/cpu build)');print('torch.__file__=',t.__file__);sys.exit(0 if c else 1)"
+"!_PY!" -c "import sys,torch;t=torch;v=t.__version__;c=t.cuda.is_available();vc=getattr(t.version,'cuda',None);nk='none_or_cpu_wheel';print('torch',v,'cuda.is_available=',c);print('torch.version.cuda',vc or nk);print('torch.__file__=',t.__file__);sys.exit(0 if c else 1)"
 set "_TOR_PROBE=%ERRORLEVEL%"
 if "!_TOR_PROBE!"=="0" exit /b 0
 

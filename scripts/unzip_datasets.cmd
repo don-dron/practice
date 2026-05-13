@@ -1,7 +1,7 @@
 @echo off
 REM Like scripts/unzip_datasets.sh — extracts inner .zip via PowerShell Expand-Archive.
 setlocal EnableExtensions EnableDelayedExpansion
-cd /d "%~dp0.."
+cd /d "%~dp0\.."
 set "ROOT=%CD%"
 set "D=%ROOT%\data"
 
