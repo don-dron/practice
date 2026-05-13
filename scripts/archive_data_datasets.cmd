@@ -27,20 +27,30 @@ goto UsageFail
 
 :: ---------------------------------------------------------------------------
 :Pack
-pushd "%ROOT%"
 set COPYFILE_DISABLE=1
-echo Создание: practice_data_datasets.tar.gz (может быть несколько ГБ^)...
+echo Packing to practice_data_datasets.tar.gz (large file, wait...)
 set "WTAR=%SystemRoot%\System32\tar.exe"
 if not exist "!WTAR!" set "WTAR=tar"
-"!WTAR!" -czf "%ROOT%\practice_data_datasets.tar.gz" "data/digital_peter" "data/yenisei_gov_reports_td" "data/russian_old_orthography_ocr"
+set "ARC=%ROOT%\practice_data_datasets.tar.gz"
+REM bsdtar: -C задаёт базу имён как в bash; без этого и без cd бывают пустые члены архива под Windows.
+for %%N in (
+  digital_peter
+  yenisei_gov_reports_td
+  russian_old_orthography_ocr
+) do (
+  if not exist "!ROOT!\data\%%N" (
+    echo ERROR: folder missing: "!ROOT!\data\%%N" - run scripts\archive_data_datasets.cmd fetch first, then pack.
+    exit /b 1
+  )
+)
+"!WTAR!" -czf "!ARC!" -C "!ROOT!" "data\digital_peter" "data\yenisei_gov_reports_td" "data\russian_old_orthography_ocr"
 set "TA=!errorlevel!"
-popd
 if not "!TA!"=="0" (
-  echo Ошибка tar ^(pack^).
+  echo Tar pack failed ^(exit !TA!^).
   exit /b 1
 )
-dir "%ROOT%\practice_data_datasets.tar.gz"
-echo Готово ^(pack^).
+dir "!ARC!"
+echo Done ^(pack^).
 exit /b 0
 
 :: ---------------------------------------------------------------------------
