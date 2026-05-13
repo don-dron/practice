@@ -65,7 +65,7 @@ if errorlevel 1 (
   exit /b 4
 )
 :after_ensure_torch_cuda
-"!EXE_PY!" -c "import torch; import sys; print('torch.cuda.is_available=', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)"
+"!EXE_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py" short
 if errorlevel 1 goto cuda_still_bad_after_verify
 goto after_gpu_cuda_bootstrap
 
@@ -166,7 +166,7 @@ if errorlevel 1 (
 )
 
 echo [train_registry] Step: probe torch CUDA
-"!_PY!" -c "import sys,torch;t=torch;v=t.__version__;c=t.cuda.is_available();vc=getattr(t.version,'cuda',None);nk='none_or_cpu_wheel';print('torch',v,'cuda.is_available=',c);print('torch.version.cuda',vc or nk);print('torch.__file__=',t.__file__);sys.exit(0 if c else 1)"
+"!_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py"
 set "_TOR_PROBE=%ERRORLEVEL%"
 if "!_TOR_PROBE!"=="0" exit /b 0
 
@@ -179,7 +179,7 @@ if errorlevel 1 (
   echo [train_registry] cu124 wheel install failed ^(network/url^?)
 )
 echo [train_registry] Step: probe after cu124
-"!_PY!" -c "import sys,torch;print('torch',torch.__version__,'cuda.is_available',torch.cuda.is_available());sys.exit(0 if torch.cuda.is_available() else 1)"
+"!_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py" short
 set "_TOR_PROBE=%ERRORLEVEL%"
 if "!_TOR_PROBE!"=="0" (
   echo [train_registry] OK: CUDA after cu124
@@ -195,7 +195,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo [train_registry] Step: probe after cu121
-"!_PY!" -c "import sys,torch;print('torch',torch.__version__,'cuda.is_available',torch.cuda.is_available());sys.exit(0 if torch.cuda.is_available() else 1)"
+"!_PY!" "%REPO_ROOT%\scripts\train_registry_torch_probe.py" short
 set "_TOR_PROBE=%ERRORLEVEL%"
 if "!_TOR_PROBE!"=="0" (
   echo [train_registry] OK: CUDA after cu121
