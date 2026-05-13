@@ -32,8 +32,11 @@ mkdir "%DEST%" 2>nul
 REM Встроенный tar иногда не тянет отдельные ZIP ^(Deflate64, AES и т.п.^): тогда Expand-Archive.
 set "UNZIP_LITERAL_ZIP=!ZIP!"
 set "UNZIP_LITERAL_DST=!DEST!"
-tar.exe -xf "!ZIP!" -C "!DEST!"
-if errorlevel 1 (
+pushd "!DEST!"
+tar.exe -xf "!ZIP!"
+set "UT=!errorlevel!"
+popd
+if not "!UT!"=="0" (
   echo tar не смог ZIP — пробуем Expand-Archive ^(как unzip под Linux^)...
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Stop'; $z = $Env:UNZIP_LITERAL_ZIP; $d = $Env:UNZIP_LITERAL_DST; Expand-Archive -LiteralPath $z -DestinationPath $d -Force }"
   if errorlevel 1 (

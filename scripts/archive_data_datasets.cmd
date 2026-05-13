@@ -36,11 +36,11 @@ tar -czf "%ROOT%\practice_data_datasets.tar.gz" ^
   "data/russian_old_orthography_ocr"
 popd
 if errorlevel 1 (
-  echo Ошибка tar (pack).
+  echo Ошибка tar ^(pack^).
   exit /b 1
 )
 dir "%ROOT%\practice_data_datasets.tar.gz"
-echo Готово (pack).
+echo Готово ^(pack^).
 exit /b 0
 
 :: ---------------------------------------------------------------------------
@@ -86,8 +86,11 @@ if errorlevel 1 (
 )
 
 echo Распаковка архива во временную папку...
-tar.exe -xzf "!DOWN!" -C "!TMPD!"
-if errorlevel 1 (
+pushd "!TMPD!"
+tar.exe -xzf "!DOWN!"
+set "_T=!errorlevel!"
+popd
+if not "!_T!"=="0" (
   rd /s /q "!TMPD!" 2>nul
   echo Ошибка tar при распаковке.
   exit /b 1
@@ -116,7 +119,7 @@ for %%D in (digital_peter russian_old_orthography_ocr yenisei_gov_reports_td) do
 rd /s /q "!TMPD!" 2>nul
 
 dir "!DOWN!"
-echo Готово (fetch): data\ — digital_peter, russian_old_orthography_ocr, yenisei_gov_reports_td
+echo Готово ^(fetch^): см. каталог data\ digital_peter, russian_old_orthography_ocr, yenisei_gov_reports_td
 echo Затем: scripts\unzip_datasets.cmd
 exit /b 0
 
@@ -126,6 +129,6 @@ exit /b 2
 
 :Usage
 echo Использование: %~nx0 [pack ^| fetch ^| download]
-echo   fetch, download — скачать archive.tar.gz и разложить три папки в data\
+echo   fetch/download — скачать archive.tar.gz и три папки в data\digital_peter и др.
 echo   pack           — упаковать data\ в practice_data_datasets.tar.gz ^(тяжёлое^)
 exit /b 2
