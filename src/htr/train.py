@@ -148,41 +148,9 @@ def _attention_hypothesis(ce_tokens: list[int], charset: Charset) -> str:
     return "".join(out)
 
 
-def run_training(cfg: dict) -> None:
-    objective = _training_objective(cfg)
-    decoder_cap = _decoder_max_steps(cfg)
-    seed = int(cfg["project"]["seed"])
-    torch.manual_seed(seed)
-
-    dc = cfg["data"]
-    train_aug = TrainAugmentation() if bool(dc.get("augmentation_train", False)) else None
-    full_ds = COCOLinesDataset(
-        coco_json=dc["coco_json"],
-        image_root=dc["image_root"],
-        text_field=dc.get("text_field", "translation"),
-        img_height=int(dc["img_height"]),
-        max_width=dc.get("max_width"),
-        min_crop_width=int(dc.get("min_crop_width", 4)),
-        train_augmentation=train_aug,
-    )
-    vf = float(dc.get("val_fraction", 0.0))
-    train_ix, val_ix = random_split_indices(len(full_ds), vf, seed=seed)
-
-    texts_train = texts_for_charset_from_coco(full_ds.samples, train_ix)
-    extra = cfg.get("charset", {}).get("extra_chars") or ""
-    charset = charset_from_strings(texts_train, extra)
-
-    train_ds = Subset(full_ds, train_ix)
-    bak = getattr(full_ds, "train_augment", None)
-    full_ds.train_augment = None
-    val_ds = Subset(full_ds, val_ix)
-    full_ds.train_augment = bak
-
-    from torch.utils.data import DataLoader
-
+def _dataload_worker_count(dc: dict) -> int:
     nw_requested = int(dc.get("num_workers", 0))
     nw = max(0, nw_requested)
-    # Windows: more workers -> more CPU for decode/collate; each worker imports torch (RAM grows).
     if sys.platform == "win32":
         _cap_raw = os.environ.get("HTR_WIN_MAX_NUM_WORKERS", "").strip()
         if _cap_raw != "0":
@@ -198,6 +166,73 @@ def run_training(cfg: dict) -> None:
                     f"(raise: larger YAML num_workers / set HTR_WIN_MAX_NUM_WORKERS=N; disable cap: =0)"
                 )
                 nw = _cap
+    return nw
+
+
+def _preprocessed_ram_budget(dc: dict, nw: int) -> tuple[int, float]:
+    raw = dc.get("preprocessed_ram_cache_max_gb", 6.0)
+    if raw is None:
+        gb = 6.0
+    else:
+        try:
+            gb = float(raw)
+        except (TypeError, ValueError):
+            gb = 6.0
+    if gb <= 0:
+        return 0, gb
+    total = gb * (1024.0**3)
+    if nw <= 0:
+        return max(int(total), 1024), gb
+    denom = max(1, nw) * 2
+    return max(int(total / denom), 1024), gb
+
+
+def run_training(cfg: dict) -> None:
+    objective = _training_objective(cfg)
+    decoder_cap = _decoder_max_steps(cfg)
+    seed = int(cfg["project"]["seed"])
+    torch.manual_seed(seed)
+
+    dc = cfg["data"]
+    nw = _dataload_worker_count(dc)
+    ram_budget_b, ram_gb_yaml = _preprocessed_ram_budget(dc, nw)
+
+    train_aug = TrainAugmentation() if bool(dc.get("augmentation_train", False)) else None
+    full_ds = COCOLinesDataset(
+        coco_json=dc["coco_json"],
+        image_root=dc["image_root"],
+        text_field=dc.get("text_field", "translation"),
+        img_height=int(dc["img_height"]),
+        max_width=dc.get("max_width"),
+        min_crop_width=int(dc.get("min_crop_width", 4)),
+        train_augmentation=train_aug,
+        preprocessed_cache_dir=dc.get("preprocessed_cache_dir"),
+        preprocessed_ram_cache_max_bytes=(ram_budget_b if ram_budget_b > 0 else None),
+    )
+    if full_ds.preprocessed_cache_root is not None:
+        print(f"[htr-train] preprocessed_cache_dir={full_ds.preprocessed_cache_root!s}")
+    if ram_budget_b > 0:
+        split_d = max(1, nw) * (2 if nw > 0 else 1)
+        print(
+            f"[htr-train] preprocessed_ram_cache_max_gb(total)≈{ram_gb_yaml:g} · "
+            f"~{ram_budget_b / (1024**3):.3f} GiB per DataLoader worker "
+            f"(split /{split_d}: train + val loaders × num_workers; num_workers={nw})"
+        )
+    vf = float(dc.get("val_fraction", 0.0))
+    train_ix, val_ix = random_split_indices(len(full_ds), vf, seed=seed)
+
+    texts_train = texts_for_charset_from_coco(full_ds.samples, train_ix)
+    extra = cfg.get("charset", {}).get("extra_chars") or ""
+    charset = charset_from_strings(texts_train, extra)
+
+    train_ds = Subset(full_ds, train_ix)
+    bak = getattr(full_ds, "train_augment", None)
+    full_ds.train_augment = None
+    val_ds = Subset(full_ds, val_ix)
+    full_ds.train_augment = bak
+
+    from torch.utils.data import DataLoader
+
     bs = int(cfg["training"]["batch_size"])
 
     _pin_memory = torch.cuda.is_available()

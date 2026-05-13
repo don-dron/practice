@@ -18,8 +18,12 @@ data:
 
   augmentation_train: false
   prefetch_factor: 8
-
-charset:
+  # После первого прохода датасета — строки как .pt по хэшу (имя файла,bbox,height,max_width,min_width).
+  # Снимает декод JPEG на последующих эпохах; не совместимо с augmentation_train: true. Очистка: удалите каталог.
+  preprocessed_cache_dir: null
+  # LRU строк в RAM, сумма ~GiB между пулами workers train+val; при num_workers=0 всё на главном процессе.
+  # 0 — только диск-кэш (если указан preprocessed_cache_dir) или без кэша.
+  preprocessed_ram_cache_max_gb: 6
   # если пусто — алфавит собирается по обучающей выборке перед стартом
   extra_chars: ""
 

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import operator
+import os
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -11,6 +15,98 @@ from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
 
 from htr.transforms import TrainAugmentation
+
+_LINES_PT_CACHE_MAGIC = "htr_lines_pt_v1"
+
+
+def _lines_tensor_cache_key(
+    fname: str,
+    bbox: Tuple[float, float, float, float],
+    img_height: int,
+    max_width: Optional[int],
+    min_crop_width: int,
+) -> str:
+    fn = fname.replace("\\", "/")
+    payload = repr((fn, bbox, img_height, max_width, min_crop_width)).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _lines_tensor_cache_path(cache_root: Path, key_hex: str) -> Path:
+    # подкаталог по префиксу — меньше нагрузка на FS при десятках тысяч файлов
+    return cache_root / key_hex[:2] / f"{key_hex}.pt"
+
+
+def _load_lines_tensor_cache(path: Path) -> Optional[Tuple[torch.Tensor, int]]:
+    try:
+        try:
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            payload = torch.load(path, map_location="cpu")
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("magic") != _LINES_PT_CACHE_MAGIC:
+        return None
+    im = payload.get("image")
+    w_raw = payload.get("width")
+    if not isinstance(im, torch.Tensor):
+        return None
+    try:
+        w = operator.index(w_raw)
+    except (TypeError, ValueError):
+        return None
+    return im, int(w)
+
+
+def _save_lines_tensor_cache(path: Path, image: torch.Tensor, width_px: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".pt.tmp")
+    torch.save({"magic": _LINES_PT_CACHE_MAGIC, "image": image.detach().cpu().contiguous(), "width": width_px}, tmp)
+    os.replace(tmp, path)
+
+
+class _RamTensorLRU:
+    """LRU хранилище тензоров строк с лимитом по приблизительному числу байт."""
+
+    OVERHEAD_BYTES = 256
+
+    def __init__(self, max_bytes: int) -> None:
+        if max_bytes <= 0:
+            raise ValueError("max_bytes должен быть > 0")
+        self._max_bytes = max_bytes
+        self._cur = 0
+        self._od: OrderedDict[str, Tuple[torch.Tensor, int]] = OrderedDict()
+
+    @staticmethod
+    def payload_bytes(tensor: torch.Tensor) -> int:
+        return int(tensor.numel() * tensor.element_size() + _RamTensorLRU.OVERHEAD_BYTES)
+
+    def get(self, key: str) -> Optional[Tuple[torch.Tensor, int]]:
+        pair = self._od.get(key)
+        if pair is None:
+            return None
+        self._od.move_to_end(key)
+        return pair
+
+    def put(self, key: str, tensor: torch.Tensor, width_px: int) -> None:
+        t = tensor.detach().cpu().clone().contiguous()
+        need = self.payload_bytes(t)
+        if need > self._max_bytes:
+            return
+
+        prev = self._od.pop(key, None)
+        if prev is not None:
+            self._cur -= self.payload_bytes(prev[0])
+
+        while self._cur + need > self._max_bytes and self._od:
+            _, (ev_t, _) = self._od.popitem(last=False)
+            self._cur -= self.payload_bytes(ev_t)
+
+        if self._cur + need <= self._max_bytes:
+            self._od[key] = (t, int(width_px))
+            self._cur += need
+            self._od.move_to_end(key)
 
 
 def _bbox_clip(x: float, y: float, w: float, h: float, W: int, H: int) -> Tuple[float, float, float, float]:
@@ -37,6 +133,8 @@ class COCOLinesDataset(Dataset):
         max_width: Optional[int] = 1200,
         min_crop_width: int = 4,
         train_augmentation: Optional[TrainAugmentation] = None,
+        preprocessed_cache_dir: Optional[Union[str, Path]] = None,
+        preprocessed_ram_cache_max_bytes: Optional[int] = None,
     ):
         self.image_root = Path(image_root)
         self.text_field = text_field
@@ -44,6 +142,17 @@ class COCOLinesDataset(Dataset):
         self.max_width = max_width
         self.min_crop_width = min_crop_width
         self.train_augment = train_augmentation
+        rc = preprocessed_cache_dir
+        self.preprocessed_cache_root: Optional[Path] = None
+        if rc is not None:
+            s = str(rc).strip()
+            if s:
+                self.preprocessed_cache_root = Path(s).expanduser().resolve()
+
+        _ram_budget = preprocessed_ram_cache_max_bytes
+        self._ram_lru: Optional[_RamTensorLRU] = None
+        if _ram_budget is not None and int(_ram_budget) > 0:
+            self._ram_lru = _RamTensorLRU(int(_ram_budget))
 
         coco_json_path = Path(coco_json)
         with open(coco_json_path, "r", encoding="utf-8") as f:
@@ -66,6 +175,16 @@ class COCOLinesDataset(Dataset):
             samples.append((fname, str(txt).strip(), tuple(float(t) for t in bbox)))
 
         self.samples = samples
+
+        if self.preprocessed_cache_root is not None and self.train_augment is not None:
+            raise ValueError(
+                "preprocessed_cache_dir задан совместно с train_augmentation: кэш был бы "
+                "недетерминированным при аугментациях — отключите один из них."
+            )
+        if self._ram_lru is not None and self.train_augment is not None:
+            raise ValueError(
+                "RAM-кэш строк (preprocessed_ram_cache_max_gb / max_bytes) несовместим с augmentation_train."
+            )
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -138,18 +257,11 @@ class COCOLinesDataset(Dataset):
         out = out.mul_(2.0).sub_(1.0)
         return out, new_w
 
-    def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, str]]:
-        fname, text, bbox = self.samples[idx]
-        img_path = self.image_root / fname
+    def _load_sample_tensors(self, img_path: Path, bbox: Tuple[float, float, float, float]) -> Tuple[torch.Tensor, int]:
         if self.train_augment is None:
             tv = self._decode_crop_resize_torchvision(img_path, bbox)
             if tv is not None:
-                tens, out_w = tv
-                return {
-                    "image": tens.contiguous(),
-                    "width": torch.tensor(out_w, dtype=torch.long),
-                    "text": text,
-                }
+                return tv
         pil = Image.open(img_path).convert("RGB")
         W, H = pil.size
         x, y, w, h = _bbox_clip(*bbox, W, H)
@@ -158,12 +270,54 @@ class COCOLinesDataset(Dataset):
             if x + w > W:
                 x = float(max(0, W - self.min_crop_width))
         crop = pil.crop((int(x), int(y), int(x + w), int(y + h)))
-        tensor, w_out = self._prepare_tensor(crop)
-        return {
-            "image": tensor,
-            "width": torch.tensor(w_out, dtype=torch.long),
-            "text": text,
-        }
+        return self._prepare_tensor(crop)
+
+    def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, str]]:
+        fname, text, bbox = self.samples[idx]
+        img_path = self.image_root / fname
+        ram = self._ram_lru
+        cache_root = self.preprocessed_cache_root
+        use_key = ram is not None or cache_root is not None
+
+        key_hex = (
+            _lines_tensor_cache_key(fname, bbox, self.img_height, self.max_width, self.min_crop_width) if use_key else ""
+        )
+
+        def _tensor_item(tens: torch.Tensor, out_w: int) -> Dict[str, Union[torch.Tensor, str]]:
+            return {
+                "image": tens.contiguous(),
+                "width": torch.tensor(out_w, dtype=torch.long),
+                "text": text,
+            }
+
+        if ram is not None:
+            hit = ram.get(key_hex)
+            if hit is not None:
+                tens, out_w = hit
+                return _tensor_item(tens, out_w)
+
+        if cache_root is not None:
+            cpath = _lines_tensor_cache_path(cache_root, key_hex)
+            disk_hit = _load_lines_tensor_cache(cpath)
+            if disk_hit is not None:
+                tens, out_w = disk_hit
+                if ram is not None:
+                    ram.put(key_hex, tens, out_w)
+                return _tensor_item(tens, out_w)
+
+        tens, out_w = self._load_sample_tensors(img_path, bbox)
+
+        if ram is not None and key_hex:
+            ram.put(key_hex, tens, out_w)
+
+        if cache_root is not None and key_hex:
+            cpath = _lines_tensor_cache_path(cache_root, key_hex)
+            try:
+                _save_lines_tensor_cache(cpath, tens, out_w)
+            except Exception:
+                pass
+
+        return _tensor_item(tens, out_w)
 
 
 def coco_collate_fn(batch: List[Dict[str, Union[torch.Tensor, str]]]) -> Dict[str, Union[torch.Tensor, List[str]]]:
