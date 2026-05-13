@@ -54,14 +54,31 @@ fetch() {
 	echo "Распаковка архива во временную папку…"
 	tar xzf "$DOWNLOAD_ARCHIVE" -C "$TMP"
 
+	# Корень архива может быть напрямую из трёх папок или одна обёртка поверх них.
+	local BASE="$TMP"
+	if [[ ! -d "$TMP/digital_peter" || ! -d "$TMP/russian_old_orthography_ocr" || ! -d "$TMP/yenisei_gov_reports_td" ]]; then
+		BASE=""
+		for cand in "$TMP"/*; do
+			if [[ -d "$cand/digital_peter" && -d "$cand/russian_old_orthography_ocr" && -d "$cand/yenisei_gov_reports_td" ]]; then
+				BASE="$cand"
+				break
+			fi
+		done
+	fi
+	if [[ -z "${BASE:-}" ]]; then
+		echo "Ошибка: в архиве нет набора из трёх каталогов (ни в корне tarball, ни в одной подпапке)." >&2
+		ls -la "$TMP"
+		exit 1
+	fi
+
 	mkdir -p "$ROOT/data"
 	for d in digital_peter russian_old_orthography_ocr yenisei_gov_reports_td; do
-		if [[ ! -d "$TMP/$d" ]]; then
-			echo "Ошибка: в архиве нет каталога \"$d\" (ожидаются три папки в корне tarball)." >&2
+		if [[ ! -d "$BASE/$d" ]]; then
+			echo "Ошибка: нет \"$BASE/$d\" после распаковки." >&2
 			exit 1
 		fi
 		rm -rf "$ROOT/data/$d"
-		mv "$TMP/$d" "$ROOT/data/"
+		mv "$BASE/$d" "$ROOT/data/"
 	done
 
 	trap - EXIT

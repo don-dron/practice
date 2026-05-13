@@ -57,13 +57,12 @@ exit /b 0
 :Fetch
 set "DOWN=%ROOT%\archive.tar.gz"
 
-echo Получение прямой ссылки с Яндекс.Диска...
-REM Как в archive_data_datasets.sh: метаданные — через curl (.json во временный файл).
-REM Invoke-RestMethod с public_key=https://… ломался на некоторых системах URL-парсером.
+echo Asking Yandex.Disk API for download link...
+REM Same as .sh: curl JSON to file.
 set "JS=%TEMP%\practice_yndx_meta_%RANDOM%.json"
 curl.exe -fsS "%META_URL%" -o "!JS!"
 if errorlevel 1 (
-  echo Ошибка: запрос метаданных к API Яндекс.Диска ^(curl^).
+  echo ERROR: curl metadata request failed.
   del "!JS!" 2>nul
   exit /b 1
 )
@@ -71,9 +70,8 @@ set "META_JSON=!JS!"
 set "HREF="
 for /f "delims=" %%U in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $p = $Env:META_JSON; if ([string]::IsNullOrWhiteSpace($p)) { exit 11 }; $t = Get-Content -LiteralPath $p -Raw -Encoding utf8; $o = ConvertFrom-Json $t -ErrorAction Stop; $h = $o.href; if ($null -eq $h) { exit 11 }; if (($h -is [string]) -and [string]::IsNullOrWhiteSpace($h)) { exit 11 }; Write-Output $h }"') do set "HREF=%%U"
 if "!HREF!"=="" (
-  echo Ошибка: в ответе API нет href. Первые символы ответа:
+  echo ERROR: no href in API response. First bytes of API body:
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $p = $Env:META_JSON; if (![string]::IsNullOrWhiteSpace($p) -and (Test-Path -LiteralPath $p)) { $t = Get-Content -LiteralPath $p -Raw -Encoding utf8; if ($t.Length -gt 350) { $t = $t.Substring(0,350) }; $t } }" 2>nul
-  echo ^(сообщите преподавателю, если здесь виден HTML/XML вместо JSON.^)
   set "META_JSON="
   del "!JS!" 2>nul
   exit /b 1
@@ -81,27 +79,27 @@ if "!HREF!"=="" (
 set "META_JSON="
 del "!JS!" 2>nul
 
-echo Загрузка архива...
+echo Downloading archive...
 curl.exe -fsSL "!HREF!" -o "!DOWN!"
 if errorlevel 1 (
-  echo Ошибка curl при скачивании архива.
+  echo ERROR: curl download failed.
   exit /b 1
 )
 
 set "TMPD=%TEMP%\practice_data_unpack_%RANDOM%"
 mkdir "!TMPD!" 2>nul
 if errorlevel 1 (
-  echo Не удалось создать временную папку.
+  echo ERROR: cannot create temp folder "!TMPD!"
   exit /b 1
 )
 
-echo Распаковка архива во временную папку...
+echo Extracting tarball to temp...
 set "WTAR=%SystemRoot%\System32\tar.exe"
 if not exist "!WTAR!" set "WTAR=tar"
 set "_BACK=%CD%"
 cd /d "!TMPD!"
 if errorlevel 1 (
-  echo Не удалось cd во временный каталог: !TMPD!
+  echo ERROR: cannot cd to "!TMPD!"
   exit /b 1
 )
 "!WTAR!" -xzf "!DOWN!"
@@ -109,25 +107,37 @@ set "_T=!errorlevel!"
 cd /d "!_BACK!"
 if not "!_T!"=="0" (
   rd /s /q "!TMPD!" 2>nul
-  echo Ошибка tar при распаковке.
+  echo ERROR: tar extract failed.
+  exit /b 1
+)
+
+REM Three folders may be at tarball root OR inside one wrapper folder.
+set "TMP_UNPACK=!TMPD!"
+set "DATAROOT="
+for /f "delims=" %%B in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $tmp = $Env:TMP_UNPACK; if (-not $tmp) { exit 2 }; $names = @('digital_peter','russian_old_orthography_ocr','yenisei_gov_reports_td'); function T([string]$r) { foreach ($x in $names) { if (-not (Test-Path (Join-Path $r $x) -PathType Container)) { return $false } }; return $true }; if (T $tmp) { [Console]::WriteLine($tmp); exit 0 }; foreach ($di in @(Get-ChildItem -LiteralPath $tmp -Directory -ErrorAction SilentlyContinue)) { if (T $di.FullName) { [Console]::WriteLine($di.FullName); exit 0 } }; exit 3 }"') do set "DATAROOT=%%B"
+set "TMP_UNPACK="
+if not defined DATAROOT (
+  echo ERROR: tarball has no folder that contains digital_peter + russian_old_orthography_ocr + yenisei_gov_reports_td
+  echo Listing top level of temp:
+  dir /b /ad "!TMPD!"
+  rd /s /q "!TMPD!" 2>nul
   exit /b 1
 )
 
 mkdir "%ROOT%\data" 2>nul
 
 for %%D in (digital_peter russian_old_orthography_ocr yenisei_gov_reports_td) do (
-  if not exist "!TMPD!\%%D\" (
-    echo Ошибка: в архиве нет каталога %%D в корне.
+  if not exist "!DATAROOT!\%%D" (
+    echo ERROR: missing folder !DATAROOT!\%%D after layout detect
     rd /s /q "!TMPD!" 2>nul
     exit /b 1
   )
   if exist "%ROOT%\data\%%D" rd /s /q "%ROOT%\data\%%D"
   mkdir "%ROOT%\data" 2>nul
-  REM move между дисками ^(например TEMP на C:, репо на D:^) падает — robocopy /MOVE работает везде.
-  robocopy "!TMPD!\%%D" "%ROOT%\data\%%D" /E /MOVE /R:2 /W:2 /NFL /NDL /NJH /NJS /nc /ns /np
+  robocopy "!DATAROOT!\%%D" "%ROOT%\data\%%D" /E /MOVE /R:2 /W:2 /NFL /NDL /NJH /NJS /nc /ns /np
   set "RO=!errorlevel!"
   if !RO! GEQ 8 (
-    echo Ошибка robocopy при переносе %%D в data\ ^(код !RO!, см. сообщения robocopy^).
+    echo ERROR: robocopy failed for %%D code=!RO!
     rd /s /q "!TMPD!" 2>nul
     exit /b 1
   )
@@ -136,8 +146,7 @@ for %%D in (digital_peter russian_old_orthography_ocr yenisei_gov_reports_td) do
 rd /s /q "!TMPD!" 2>nul
 
 dir "!DOWN!"
-echo Готово ^(fetch^): см. каталог data\ digital_peter, russian_old_orthography_ocr, yenisei_gov_reports_td
-echo Затем: scripts\unzip_datasets.cmd
+echo Done ^(fetch^). Run: scripts\unzip_datasets.cmd
 exit /b 0
 
 REM ---------------------------------------------------------------------------
