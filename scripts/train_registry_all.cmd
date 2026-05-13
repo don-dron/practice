@@ -9,6 +9,7 @@ REM If torch has no CUDA but you ask for cuda: reinstalls GPU wheels ^(needs int
 REM Skip auto pip fix: set TRAIN_REGISTRY_SKIP_CUDA_PIP=1
 REM Allow CPU-only run without pip: set TRAIN_REGISTRY_ALLOW_CPU=1 ^|^| pass --device cpu
 REM Quieter pip: set TRAIN_REGISTRY_PIP_QUIET=1  ^(adds -q^)
+REM Exit codes from :ensure_torch_cuda: 0 OK, 1 pip/venv failure, 2 CUDA false after wheels
 
 cd /d "%~dp0.."
 set "REPO_ROOT=%CD%"
@@ -51,8 +52,13 @@ if errorlevel 1 (
   REM default path: wants GPU
   if not defined TRAIN_REGISTRY_SKIP_CUDA_PIP (
     call :ensure_torch_cuda "!EXE_PY!"
+    REM IF ERRORLEVEL n is true when exit code GE n ; test higher codes first.
+    if errorlevel 2 (
+      echo [train_registry] CUDA not usable: torch.cuda.is_available is False after cu124/cu121. See hints above ^(GPU/driver^?). Use --device cpu or TRAIN_REGISTRY_ALLOW_CPU=1.
+      exit /b 5
+    )
     if errorlevel 1 (
-      echo [train_registry] CUDA bootstrap ^(pip / torch^) failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for full pip output^).
+      echo [train_registry] pip / venv bootstrap failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for verbose pip^).
       exit /b 4
     )
   )
@@ -118,7 +124,8 @@ dir /b "%SNAP%"
 exit /b 0
 
 REM ---------------------------------------------------------------------------
-REM %1 = python.exe path ; exit 0 if cuda ok after steps, 1 if hard fail
+REM %1 = python.exe path
+REM Exit: 0 = CUDA OK, 1 = pip/ensurepip failure, 2 = CUDA false after cu124+cu121
 :ensure_torch_cuda
 set "_PY=%~1"
 set "_PIPEXTRA="
@@ -141,6 +148,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [train_registry] Step: pip uninstall practice-htr ^(clean editable metadata^)
+"!_PY!" -m pip uninstall -y practice-htr 2>nul
+
 echo [train_registry] Step: pip install -e repo ^(dependencies^)
 "!_PY!" -m pip install %_PIPEXTRA% -e "%REPO_ROOT%"
 if errorlevel 1 (
@@ -149,8 +159,9 @@ if errorlevel 1 (
 )
 
 echo [train_registry] Step: probe torch CUDA
-"!_PY!" -c "import sys,torch;t=torch;v=t.__version__;c=t.cuda.is_available();vc=getattr(t.version,'cuda',None);print('torch',v,'cuda.is_available=',c);print('torch.version.cuda',vc or '');sys.exit(0 if c else 1)"
-if not errorlevel 1 exit /b 0
+"!_PY!" -c "import sys,torch;t=torch;v=t.__version__;c=t.cuda.is_available();vc=getattr(t.version,'cuda',None);print('torch',v,'cuda.is_available=',c);print('torch.version.cuda',vc or '(none/cpu build)');print('torch.__file__=',t.__file__);sys.exit(0 if c else 1)"
+set "_TOR_PROBE=%ERRORLEVEL%"
+if "!_TOR_PROBE!"=="0" exit /b 0
 
 echo [train_registry] torch without working CUDA - reinstalling GPU wheels (cu124, then cu121). Needs internet.
 
@@ -162,7 +173,8 @@ if errorlevel 1 (
 )
 echo [train_registry] Step: probe after cu124
 "!_PY!" -c "import sys,torch;print('torch',torch.__version__,'cuda.is_available',torch.cuda.is_available());sys.exit(0 if torch.cuda.is_available() else 1)"
-if not errorlevel 1 (
+set "_TOR_PROBE=%ERRORLEVEL%"
+if "!_TOR_PROBE!"=="0" (
   echo [train_registry] OK: CUDA after cu124
   exit /b 0
 )
@@ -177,12 +189,20 @@ if errorlevel 1 (
 )
 echo [train_registry] Step: probe after cu121
 "!_PY!" -c "import sys,torch;print('torch',torch.__version__,'cuda.is_available',torch.cuda.is_available());sys.exit(0 if torch.cuda.is_available() else 1)"
-if not errorlevel 1 (
+set "_TOR_PROBE=%ERRORLEVEL%"
+if "!_TOR_PROBE!"=="0" (
   echo [train_registry] OK: CUDA after cu121
   exit /b 0
 )
-echo [train_registry] Still no CUDA from PyTorch builds on this interpreter.
-exit /b 1
+echo [train_registry] Still no CUDA from PyTorch on this interpreter.
+echo [train_registry] nvidia-smi ^(driver / GPU in PATH^):
+where nvidia-smi >nul 2>&1
+if errorlevel 1 (
+  echo [train_registry] nvidia-smi not found - no driver, VM without GPU passthrough, or wrong machine account.
+) else (
+  nvidia-smi -L
+)
+exit /b 2
 
 :err
 echo Train step failed, exit code %ERRORLEVEL%.
