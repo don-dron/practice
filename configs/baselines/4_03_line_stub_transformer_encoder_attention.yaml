@@ -1,10 +1,10 @@
-# §4.3 — трансформерный кодировщик изображения строки ± CTC или лёгкий декодер (YAML зафиксирован до реализации).
+# §4.3 — трансформерный кодировщик признаков строки после CNN-сжатия с головкой CTC.
 
 methodology_profile:
   report_section: "4.3"
-  short_name: line_stub_transformer_encoder_attention
-  status: scaffold_yaml_only
-  note: Специализированные параметры (число слоёв, головы, пороговый шаг патч-сетки) перенести под keys model.* когда появится builder.
+  short_name: transformer_encoder_line_ctc_implemented
+  status: implemented
+  note: model.name transformer_encoder_line_ctc; параметры model.transformer_* в resolve_model/build.
 
 planned_model:
   encoder: transformer_or_hybrid_patch_tokens_after_cnn_reduction
@@ -27,11 +27,17 @@ data:
   augmentation_train: false
 
 model:
-  name: stub_section_4_3_transformer_line_encoder
+  name: transformer_encoder_line_ctc
+  transformer_d_model: 256
+  transformer_nhead: 4
+  transformer_encoder_layers: 2
+  transformer_ff_dim: 1024
+  dropout: 0.1
 
 training:
+  objective: ctc
   batch_size: 8
   epochs: 10
   lr: 0.001
-  experiment_name: "stub_report_section_4_3"
-  checkpoint_dir: "training/checkpoints/stub_sections"
+  experiment_name: "transformer_encoder_section43"
+  checkpoint_dir: "training/checkpoints"

@@ -1,10 +1,10 @@
-# §4.4 — двухэтапный контур страницы: детектор зон затем строковый блок §4.1–4.3 (YAML-заготовка для §5.1 до реализации).
+# §4.4 — планируемый двухэтапный контур «детектор → строковый распознаватель». Пока в коде есть только строковый этап (данные coco_lines); обучение соответствует §4.3 с уменьшенным d_model.
 
 methodology_profile:
   report_section: "4.4"
-  short_name: page_detector_then_line_recognizer
-  status: scaffold_yaml_only
-  note: Ключи ниже описывают планируемое разнесение второго этапа; активный код обучателя пока поддерживает только строковые датасеты kind=coco_lines.
+  short_name: page_detector_then_line_placeholder_line_phase
+  status: partially_implemented
+  note: Детектор страниц не запускается; цепочка как §4.3 на вырезках строки (плейсхолдер до полностраничного COCO и детектора).
 
 detector_training:
   status: scaffold
@@ -35,11 +35,17 @@ data:
   augmentation_train: false
 
 model:
-  name: stub_section_4_4_detector_then_line
+  name: transformer_encoder_line_ctc
+  transformer_d_model: 192
+  transformer_nhead: 4
+  transformer_encoder_layers: 2
+  transformer_ff_dim: 768
+  dropout: 0.1
 
 training:
+  objective: ctc
   batch_size: 8
   epochs: 10
   lr: 0.001
-  experiment_name: "stub_report_section_4_4"
-  checkpoint_dir: "training/checkpoints/stub_sections"
+  experiment_name: "two_stage_line_placeholder_section44"
+  checkpoint_dir: "training/checkpoints"

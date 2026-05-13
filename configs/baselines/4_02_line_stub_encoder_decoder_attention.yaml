@@ -1,10 +1,10 @@
-# §4.2 — строковый энкодер–декодер с механизмом внимания (YAML зафиксирован для §5.1 до реализации в коде).
+# §4.2 — строковый энкодер–декодер с механизмом внимания (реализован как CNN+BiLSTM + декодер с additive attention).
 
 methodology_profile:
   report_section: "4.2"
-  short_name: line_stub_encoder_decoder_attention
-  status: scaffold_yaml_only
-  note: После сборки архитектуры замените model.name на боевое значение из resolve_model; при необходимости скорректируйте training.* и planned_model.*
+  short_name: line_attention_decoder
+  status: implemented
+  note: model.name attention_line_seq2seq; цель обучения training.objective attention_ce (teacher forcing CE).
 
 planned_model:
   arch: convolutional_encoder_bilstm_or_transformer_slices_tbd
@@ -28,11 +28,15 @@ data:
   augmentation_train: false
 
 model:
-  name: stub_section_4_2_attention_decoder_line
+  name: attention_line_seq2seq
+  lstm_hidden_encoder: 256
+  encoder_lstm_layers: 2
 
 training:
+  objective: attention_ce
+  decoder_max_steps: 512
   batch_size: 8
   epochs: 10
   lr: 0.001
-  experiment_name: "stub_report_section_4_2"
-  checkpoint_dir: "training/checkpoints/stub_sections"
+  experiment_name: "line_attention_section42"
+  checkpoint_dir: "training/checkpoints"

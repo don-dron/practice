@@ -15,11 +15,13 @@ from htr.device import move_batch_to_device, pick_device
 from htr.eval.metrics import lev_ratio
 from htr.io.checkpoint import save_checkpoint
 from htr.models import resolve_model
+from htr.models.attention_line import AttentionLineSeq2Seq
+from htr.models.resnet_pretrained_line_ctc import PretrainedResnetLineCTC
 from htr.transforms import TrainAugmentation
 
 
-def _pack_targets(texts: list[str], charset: Charset, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    tensors = [charset.encode(t) for t in texts]
+def _pack_targets(texts_batch: list[str], charset: Charset, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    tensors = [charset.encode(t) for t in texts_batch]
     tlens = torch.tensor([len(x) for x in tensors], dtype=torch.long, device=device)
     if tlens.sum().item() == 0:
         return torch.zeros(0, dtype=torch.long, device=device), tlens
@@ -27,22 +29,110 @@ def _pack_targets(texts: list[str], charset: Charset, device: torch.device) -> t
     return concat, tlens
 
 
-def _reject_yaml_methodology_stubs(cfg: dict) -> None:
-    name = str(cfg.get("model", {}).get("name", "")).lower()
-    if not name.startswith("stub_section"):
+def _training_objective(cfg: dict) -> str:
+    return str(cfg.get("training", {}).get("objective", "ctc")).strip().lower()
+
+
+def _decoder_max_steps(cfg: dict) -> int:
+    return max(16, int(cfg.get("training", {}).get("decoder_max_steps", 512)))
+
+
+def _freeze_from_plan(cfg: dict) -> int:
+    ppt = cfg.get("planned_transfer_policy")
+    if not isinstance(ppt, dict):
+        return 0
+    fx = ppt.get("freeze_encoder_until_epoch")
+    if fx is None:
+        return 0
+    try:
+        return max(0, int(fx))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _freeze_backbone_epochs(cfg: dict) -> int:
+    mh = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    fv = mh.get("freeze_backbone_epochs")
+    if fv is not None:
+        try:
+            return max(0, int(fv))
+        except (TypeError, ValueError):
+            return _freeze_from_plan(cfg)
+    return _freeze_from_plan(cfg)
+
+
+def _set_pretrained_backbone_frozen(model: nn.Module, backbone_frozen: bool) -> None:
+    if not isinstance(model, PretrainedResnetLineCTC):
         return
-    mp = cfg.get("methodology_profile") if isinstance(cfg.get("methodology_profile"), dict) else {}
-    sec = mp.get("report_section", "?")
-    note_raw = mp.get("note", "")
-    note = str(note_raw).strip() if note_raw is not None else ""
-    tail = f" Примечание: {note}" if note else ""
-    raise SystemExit(
-        f"Конфигурация — YAML-заготовка §{sec} для отчёта; модель `{name}` пока не реализована в обучителе.{tail}"
-    )
+    for p in model.backbone_parameters():
+        p.requires_grad = not backbone_frozen
+
+
+def _truncate_enc(enc: list[int], cap_steps: int) -> list[int]:
+    steps = len(enc) + 1 if enc else 1
+    if steps <= cap_steps:
+        return enc
+    return enc[: max(0, cap_steps - 1)]
+
+
+def _prepare_attention_batches(
+    model: AttentionLineSeq2Seq,
+    charset: Charset,
+    texts_batch: list[str],
+    device: torch.device,
+    decoder_cap: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    sos = model.sos_idx_emb
+    pad_emb = model.pad_idx_emb
+    eos_c = model.eos_logits
+
+    batch_enc: list[list[int]] = []
+    lengths = []
+    for tex in texts_batch:
+        ee = charset.encode(tex)
+        ee_t = _truncate_enc(ee, decoder_cap)
+        batch_enc.append(ee_t)
+        ln = len(ee_t)
+        lengths.append(1 if ln == 0 else ln + 1)
+
+    lm = max(lengths)
+    b_sz = len(texts_batch)
+
+    tin = torch.full((b_sz, lm), pad_emb, dtype=torch.long, device=device)
+    targ = torch.full((b_sz, lm), -100, dtype=torch.long, device=device)
+    msk = torch.zeros(b_sz, lm, dtype=torch.bool, device=device)
+
+    for bi, enc_ids in enumerate(batch_enc):
+        if not enc_ids:
+            msk[bi, 0] = True
+            tin[bi, 0] = sos
+            targ[bi, 0] = eos_c
+            continue
+
+        steps = len(enc_ids) + 1
+        for s in range(steps):
+            msk[bi, s] = True
+            tin[bi, s] = sos if s == 0 else enc_ids[s - 1] - 1
+            if s < len(enc_ids):
+                targ[bi, s] = enc_ids[s] - 1
+            else:
+                targ[bi, s] = eos_c
+
+    return tin, targ, msk
+
+
+def _attention_hypothesis(ce_tokens: list[int], charset: Charset) -> str:
+    out: list[str] = []
+    for k in ce_tokens:
+        cid = k + 1
+        if 1 <= cid < len(charset.itos):
+            out.append(charset.itos[cid])
+    return "".join(out)
 
 
 def run_training(cfg: dict) -> None:
-    _reject_yaml_methodology_stubs(cfg)
+    objective = _training_objective(cfg)
+    decoder_cap = _decoder_max_steps(cfg)
     seed = int(cfg["project"]["seed"])
     torch.manual_seed(seed)
 
@@ -65,16 +155,16 @@ def run_training(cfg: dict) -> None:
     charset = charset_from_strings(texts_train, extra)
 
     train_ds = Subset(full_ds, train_ix)
-
-    eval_aug_backup = getattr(full_ds, "train_augment", None)
+    bak = getattr(full_ds, "train_augment", None)
     full_ds.train_augment = None
     val_ds = Subset(full_ds, val_ix)
-    full_ds.train_augment = eval_aug_backup
+    full_ds.train_augment = bak
 
     from torch.utils.data import DataLoader
 
     nw = int(dc.get("num_workers", 0))
     bs = int(cfg["training"]["batch_size"])
+
     loader_train = DataLoader(
         train_ds,
         shuffle=True,
@@ -92,16 +182,19 @@ def run_training(cfg: dict) -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    device_s = pick_device(cfg["project"].get("device", "cuda"))
-    device = torch.device(device_s)
-
+    device = torch.device(pick_device(cfg["project"].get("device", "cuda")))
     model = resolve_model(cfg, charset.num_classes).to(device)
 
-    criterion = nn.CTCLoss(blank=Charset.blank_idx, zero_infinity=True)
+    freeze_ep = _freeze_backbone_epochs(cfg)
+
+    criterion = nn.CTCLoss(blank=Charset.blank_idx, zero_infinity=True) if objective != "attention_ce" else None
     lr = float(cfg["training"]["lr"])
     wd = float(cfg["training"].get("weight_decay", 0.0))
-    optim_ = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
 
+    if freeze_ep > 0:
+        _set_pretrained_backbone_frozen(model, True)
+
+    optim_ = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     scaler = GradScaler(enabled=bool(cfg["training"].get("amp", False)))
 
     epochs = int(cfg["training"]["epochs"])
@@ -110,70 +203,121 @@ def run_training(cfg: dict) -> None:
     experiment = cfg["training"].get("experiment_name", "run")
 
     for epoch in range(1, epochs + 1):
+        if freeze_ep > 0 and isinstance(model, PretrainedResnetLineCTC):
+            _set_pretrained_backbone_frozen(model, epoch <= freeze_ep)
+
         model.train()
         total_loss = 0.0
-        nb = 0
-        bar = tqdm(loader_train, desc=f"epoch {epoch}/{epochs}", leave=False)
-        for batch in bar:
-            b = move_batch_to_device(batch, device)
-            images = b["image"]  # type: ignore[arg-type]
-            texts_batch: list[str] = b["text"]  # type: ignore[list-item]
-
-            targets, target_lengths = _pack_targets(texts_batch, charset, device)
+        nb_tr = 0
+        train_bar = tqdm(loader_train, desc=f"epoch {epoch}/{epochs}", leave=False)
+        for batch in train_bar:
+            b_t = move_batch_to_device(batch, device)
+            images = b_t["image"]  # type: ignore[arg-type]
+            texts_batch: list[str] = b_t["text"]  # type: ignore[list-item]
 
             optim_.zero_grad(set_to_none=True)
             use_amp = scaler.is_enabled()
-            if use_amp:
-                with torch.cuda.amp.autocast(enabled=True):
-                    log_probs = model(images)
-                    t_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
-                    loss = criterion(log_probs, targets, t_len, target_lengths)
-                scaler.scale(loss).backward()
-                clip = float(cfg["training"].get("clip_grad_norm", 5.0))
-                if clip > 0:
-                    scaler.unscale_(optim_)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
-                scaler.step(optim_)
-                scaler.update()
+
+            if objective == "attention_ce":
+                if not isinstance(model, AttentionLineSeq2Seq):
+                    raise TypeError("objective attention_ce требует model.name attention_line_seq2seq")
+                tin_y, targ_y, m_ok = _prepare_attention_batches(model, charset, texts_batch, device, decoder_cap)
+                if use_amp:
+                    with torch.cuda.amp.autocast(enabled=True):
+                        loss = model.compute_loss_ce(images, tin_y, targ_y, m_ok)
+                    scaler.scale(loss).backward()
+                    clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
+                    if clip_val > 0:
+                        scaler.unscale_(optim_)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                    scaler.step(optim_)
+                    scaler.update()
+                else:
+                    loss = model.compute_loss_ce(images, tin_y, targ_y, m_ok)
+                    loss.backward()
+                    clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
+                    if clip_val > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                    optim_.step()
+
             else:
-                log_probs = model(images)
-                t_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
-                loss = criterion(log_probs, targets, t_len, target_lengths)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg["training"].get("clip_grad_norm", 5.0)))
-                optim_.step()
+                assert criterion is not None
+                targets_tl, tgt_lengths = _pack_targets(texts_batch, charset, device)
+                if use_amp:
+                    with torch.cuda.amp.autocast(enabled=True):
+                        log_probs = model(images)
+                        inp_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
+                        batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
+                    scaler.scale(batch_loss).backward()
+                    clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
+                    if clip_val > 0:
+                        scaler.unscale_(optim_)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                    scaler.step(optim_)
+                    scaler.update()
+                else:
+                    log_probs = model(images)
+                    inp_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
+                    batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
+                    batch_loss.backward()
+                    clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
+                    if clip_val > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                    optim_.step()
+
+                loss = batch_loss
 
             total_loss += float(loss.item())
-            nb += 1
-            bar.set_postfix(loss=loss.item())
+            nb_tr += 1
+            train_bar.set_postfix(loss=loss.item())
 
-        mean_loss = total_loss / max(1, nb)
-
+        mean_train = total_loss / max(1, nb_tr)
         cer_sum = 0.0
         n_lab = 0
+
         model.eval()
         with torch.no_grad():
             if not val_ix:
-                print(f"[epoch {epoch}] train_loss={mean_loss:.4f} (val: пусто val_fraction)")
+                print(f"[epoch {epoch}] train_loss={mean_train:.4f} (val: пусто val_fraction)")
             else:
-                for batch in tqdm(loader_val, desc=f"val {epoch}", leave=False):
-                    b = move_batch_to_device(batch, device)
-                    images_b = b["image"]  # type: ignore[arg-type]
-                    texts_ref: list[str] = b["text"]  # type: ignore[list-item]
-                    lp = model(images_b)
-                    greedy_seq = lp.argmax(dim=-1).transpose(0, 1).cpu().tolist()
-                    for i, seq in enumerate(greedy_seq):
-                        hyp = charset.decode_indices(seq)
-                        _, ratio = lev_ratio(hyp, texts_ref[i])
-                        cer_sum += ratio
-                        n_lab += 1
-                cer_val = cer_sum / max(1, n_lab)
-                print(f"[epoch {epoch}] train_loss={mean_loss:.4f} val_sym_error_ratio={cer_val:.4f}")
+                for vbatch in tqdm(loader_val, desc=f"val {epoch}", leave=False):
+                    b_v = move_batch_to_device(vbatch, device)
+                    imgs_b = b_v["image"]  # type: ignore[arg-type]
+                    refs_txt: list[str] = b_v["text"]  # type: ignore[list-item]
+                    if objective == "attention_ce" and isinstance(model, AttentionLineSeq2Seq):
+                        ce_preds = model.greedy_inference(imgs_b, decoder_cap)
+                        for bi, sq in enumerate(ce_preds):
+                            hyp_txt = _attention_hypothesis(sq, charset)
+                            _, ratio_val = lev_ratio(hyp_txt, refs_txt[bi])
+                            cer_sum += ratio_val
+                            n_lab += 1
+                    else:
+                        log_p = model(imgs_b)
+                        greedy_sequences = log_p.argmax(dim=-1).transpose(0, 1).cpu().tolist()
+                        for bi, sq in enumerate(greedy_sequences):
+                            hyp_txt = charset.decode_indices(sq)
+                            _, ratio_val = lev_ratio(hyp_txt, refs_txt[bi])
+                            cer_sum += ratio_val
+                            n_lab += 1
+                avg_cer = cer_sum / max(1, n_lab)
+                print(f"[epoch {epoch}] train_loss={mean_train:.4f} val_sym_error_ratio={avg_cer:.4f}")
 
         save_every = max(1, int(cfg["training"].get("save_every_epochs", 1)))
         if epoch % save_every == 0:
-            path = ckpt_dir / f"{experiment}_e{epoch}.pt"
-            save_checkpoint(str(path), model.state_dict(), itos=charset.itos, model_name=str(cfg["model"]["name"]), yaml_dump=dict(cfg))
+            epath = ckpt_dir / f"{experiment}_e{epoch}.pt"
+            save_checkpoint(
+                str(epath),
+                model.state_dict(),
+                itos=charset.itos,
+                model_name=str(cfg["model"]["name"]),
+                yaml_dump=dict(cfg),
+            )
 
-    latest = ckpt_dir / "latest.pt"
-    save_checkpoint(str(latest), model.state_dict(), itos=charset.itos, model_name=str(cfg["model"]["name"]), yaml_dump=dict(cfg))
+    latest_ck = ckpt_dir / "latest.pt"
+    save_checkpoint(
+        str(latest_ck),
+        model.state_dict(),
+        itos=charset.itos,
+        model_name=str(cfg["model"]["name"]),
+        yaml_dump=dict(cfg),
+    )

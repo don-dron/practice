@@ -1,15 +1,15 @@
-# §4.5 — трансфер предобученного кодировщика OCR или близкой зрительной задачи дообучением на смеси §3 (YAML до реализации загрузки весов).
+# §4.5 — дообучение строкового распознавателя поверх кодировочной части ResNet-18 из ImageNet (упрощённый stem под низкий H=32).
 
 methodology_profile:
   report_section: "4.5"
-  short_name: transfer_pretrained_visual_encoder_then_finetune
-  status: scaffold_yaml_only
-  note: По готовности кода перенести реальные пути freeze_policy и warmup в ключи ниже без изменения схемы слияния YAML.
+  short_name: transfer_pretrained_resnet18_then_line_ctc
+  status: implemented
+  note: Весов ImageNet в первых слоях ResNet через torchvision; см. pretrained_resnet_line_ctc и freeze_encoder_until_epoch.
 
 planned_transfer_policy:
   backbone_checkpoint_or_url: ""
-  backbone_topology_reference: совпадает с выбранной реализацией §4.2 или §4.3
-  freeze_encoder_until_epoch: null
+  backbone_topology_reference: resnet18_line_ctc_bundle
+  freeze_encoder_until_epoch: 2
   encoder_lr_multiplier: null
   decoder_head_lr_multiplier: null
 
@@ -29,11 +29,13 @@ data:
   augmentation_train: false
 
 model:
-  name: stub_section_4_5_transfer_pretrained_line_encoder
+  name: pretrained_resnet_line_ctc
+  imagenet_pretrained: true
 
 training:
+  objective: ctc
   batch_size: 8
   epochs: 10
   lr: 0.001
-  experiment_name: "stub_report_section_4_5"
-  checkpoint_dir: "training/checkpoints/stub_sections"
+  experiment_name: "pretrained_backbone_section45"
+  checkpoint_dir: "training/checkpoints"
