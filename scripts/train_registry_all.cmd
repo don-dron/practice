@@ -8,6 +8,7 @@ REM Python: prefers .venv\Scripts\python.exe ; override with TRAIN_REGISTRY_PYTH
 REM If torch has no CUDA but you ask for cuda: reinstalls GPU wheels ^(needs internet^).
 REM Skip auto pip fix: set TRAIN_REGISTRY_SKIP_CUDA_PIP=1
 REM Allow CPU-only run without pip: set TRAIN_REGISTRY_ALLOW_CPU=1 ^|^| pass --device cpu
+REM Quieter pip: set TRAIN_REGISTRY_PIP_QUIET=1  ^(adds -q^)
 
 cd /d "%~dp0.."
 set "REPO_ROOT=%CD%"
@@ -51,11 +52,11 @@ if errorlevel 1 (
   if not defined TRAIN_REGISTRY_SKIP_CUDA_PIP (
     call :ensure_torch_cuda "!EXE_PY!"
     if errorlevel 1 (
-      echo [train_registry] CUDA bootstrap ^(pip / torch^) failed - see messages above.
+      echo [train_registry] CUDA bootstrap ^(pip / torch^) failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for full pip output^).
       exit /b 4
     )
   )
-  "!EXE_PY!" -c "import torch; import sys; print('torch.cuda.is_available=', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)" 2>nul
+  "!EXE_PY!" -c "import torch; import sys; print('torch.cuda.is_available=', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)"
   if errorlevel 1 (
     if not defined TRAIN_REGISTRY_ALLOW_CPU (
       echo ERROR: CUDA still not available after bootstrap. Set TRAIN_REGISTRY_SKIP_CUDA_PIP=0 removed^? Try manual pip from pytorch.org
@@ -120,30 +121,47 @@ REM ---------------------------------------------------------------------------
 REM %1 = python.exe path ; exit 0 if cuda ok after steps, 1 if hard fail
 :ensure_torch_cuda
 set "_PY=%~1"
+set "_PIPEXTRA="
+if defined TRAIN_REGISTRY_PIP_QUIET set "_PIPEXTRA=-q"
 echo [train_registry] Using: "!_PY!"
-"!_PY!" -m pip install -q -U pip
+echo [train_registry] Step: ensure pip module
+"!_PY!" -m pip --version >nul 2>&1
+if errorlevel 1 (
+  echo [train_registry] pip missing - running ensurepip...
+  "!_PY!" -m ensurepip --upgrade
+  if errorlevel 1 (
+    echo [train_registry] ensurepip failed - reinstall Python with pip / use py -3.11 -m venv .venv
+    exit /b 1
+  )
+)
+echo [train_registry] Step: pip install -U pip
+"!_PY!" -m pip install %_PIPEXTRA% -U pip
 if errorlevel 1 (
   echo [train_registry] pip upgrade failed.
   exit /b 1
 )
 
-"!_PY!" -m pip install -q -e "%REPO_ROOT%"
+echo [train_registry] Step: pip install -e repo ^(dependencies^)
+"!_PY!" -m pip install %_PIPEXTRA% -e "%REPO_ROOT%"
 if errorlevel 1 (
-  echo [train_registry] pip install -e . failed ^(offline^? deps^?)
+  echo [train_registry] pip install -e . failed ^(offline^? deps^? Python version^?)
   exit /b 1
 )
 
-"!_PY!" -c "import sys; sys.exit(0 if __import__('torch').cuda.is_available() else 1)" 2>nul
+echo [train_registry] Step: probe torch CUDA
+"!_PY!" -c "import sys,torch;t=torch;v=t.__version__;c=t.cuda.is_available();vc=getattr(t.version,'cuda',None);print('torch',v,'cuda.is_available=',c);print('torch.version.cuda',vc or '');sys.exit(0 if c else 1)"
 if not errorlevel 1 exit /b 0
 
 echo [train_registry] torch without working CUDA - reinstalling GPU wheels (cu124, then cu121). Needs internet.
 
 "!_PY!" -m pip uninstall -y torch torchvision torchaudio 2>nul
-"!_PY!" -m pip install --upgrade-strategy eager torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+echo [train_registry] Step: pip torch cu124
+"!_PY!" -m pip install %_PIPEXTRA% --upgrade-strategy eager torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 if errorlevel 1 (
   echo [train_registry] cu124 wheel install failed ^(network/url^?)
 )
-"!_PY!" -c "import sys; sys.exit(0 if __import__('torch').cuda.is_available() else 1)" 2>nul
+echo [train_registry] Step: probe after cu124
+"!_PY!" -c "import sys,torch;print('torch',torch.__version__,'cuda.is_available',torch.cuda.is_available());sys.exit(0 if torch.cuda.is_available() else 1)"
 if not errorlevel 1 (
   echo [train_registry] OK: CUDA after cu124
   exit /b 0
@@ -151,12 +169,14 @@ if not errorlevel 1 (
 
 echo [train_registry] Retrying CUDA wheels with cu121...
 "!_PY!" -m pip uninstall -y torch torchvision torchaudio 2>nul
-"!_PY!" -m pip install --upgrade-strategy eager torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+echo [train_registry] Step: pip torch cu121
+"!_PY!" -m pip install %_PIPEXTRA% --upgrade-strategy eager torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 if errorlevel 1 (
   echo [train_registry] cu121 wheel install failed.
   exit /b 1
 )
-"!_PY!" -c "import sys; sys.exit(0 if __import__('torch').cuda.is_available() else 1)" 2>nul
+echo [train_registry] Step: probe after cu121
+"!_PY!" -c "import sys,torch;print('torch',torch.__version__,'cuda.is_available',torch.cuda.is_available());sys.exit(0 if torch.cuda.is_available() else 1)"
 if not errorlevel 1 (
   echo [train_registry] OK: CUDA after cu121
   exit /b 0

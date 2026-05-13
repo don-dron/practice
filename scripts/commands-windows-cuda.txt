@@ -123,7 +123,9 @@ scripts\train_registry_all.cmd --device cuda
 
 Перед первым запуском на GPU скрипт сам выполняет: `pip install -U pip`, `pip install -e .` в выбранный интерпретатор; если `torch.cuda.is_available` всё равно ложь — переустанавливает PyTorch из колёс **cu124**, затем **cu121** (нужен интернет).
 
-Отключить автоматический pip/cu-колёса: `set TRAIN_REGISTRY_SKIP_CUDA_PIP=1`. Свой интерпретатор Python: `set TRAIN_REGISTRY_PYTHON=C:\полный\путь\python.exe`.
+Отключить автоматический pip/cu-колёса: `set TRAIN_REGISTRY_SKIP_CUDA_PIP=1`. Свой интерпретатор Python: `set TRAIN_REGISTRY_PYTHON=C:\полный\путь\python.exe`. Тихий режим pip (`-q`): `set TRAIN_REGISTRY_PIP_QUIET=1`.
+
+Перед pip скрипт проверяет наличие `pip` и при необходимости выполняет `python -m ensurepip`; шаги подписаны `Step:` в консоли, чтобы было видно, на чём упало.
 
 После попытки bootstrap, если CUDA по-прежнему недоступна: код выхода **3**. Ошибка на шаге pip (например, нет сети) при bootstrap — код **4**. Намеренно только CPU без проверки GPU: `set TRAIN_REGISTRY_ALLOW_CPU=1` или `--device cpu`.
 
