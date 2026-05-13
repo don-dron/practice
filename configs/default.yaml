@@ -36,7 +36,7 @@ model:
 
 training:
   batch_size: 192
-  epochs: 40
+  epochs: 60
   lr: 0.0005
   weight_decay: 0.0
   clip_grad_norm: 5.0
