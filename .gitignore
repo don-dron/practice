@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Локальные данные (тяжёлые каталоги изображений и текстов)
+data/digital_peter
+data/yenisei_gov_reports_td
+data/russian_old_orthography_ocr
+
+archive.tar.gz
