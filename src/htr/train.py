@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import torch
 from torch import nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 
 from htr.charset import Charset, charset_from_strings
@@ -18,6 +18,23 @@ from htr.models import resolve_model
 from htr.models.attention_line import AttentionLineSeq2Seq
 from htr.models.resnet_pretrained_line_ctc import PretrainedResnetLineCTC
 from htr.transforms import TrainAugmentation
+
+
+def _make_grad_scaler(enabled: bool):
+    """GradScaler: torch.amp API on newer PyTorch, legacy import on older builds."""
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    from torch.cuda.amp import GradScaler as _LegacyGradScaler
+
+    return _LegacyGradScaler(enabled=enabled)
+
+
+def _autocast_cuda():
+    if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
+        return torch.amp.autocast("cuda", enabled=True)
+    import torch.cuda.amp as cuda_amp
+
+    return cuda_amp.autocast(enabled=True)
 
 
 def _pack_targets(texts_batch: list[str], charset: Charset, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -162,7 +179,12 @@ def run_training(cfg: dict) -> None:
 
     from torch.utils.data import DataLoader
 
-    nw = int(dc.get("num_workers", 0))
+    nw_requested = int(dc.get("num_workers", 0))
+    nw = max(0, nw_requested)
+    # Windows: many workers + spawn() = slow / fragile (each worker imports torch).
+    if sys.platform == "win32" and nw > 8:
+        print(f"[htr-train] num_workers: YAML asked {nw}, capping at 8 on Windows")
+        nw = 8
     bs = int(cfg["training"]["batch_size"])
 
     loader_train = DataLoader(
@@ -206,7 +228,8 @@ def run_training(cfg: dict) -> None:
         _set_pretrained_backbone_frozen(model, True)
 
     optim_ = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
-    scaler = GradScaler(enabled=bool(cfg["training"].get("amp", False)))
+    amp_cfg = bool(cfg["training"].get("amp", False))
+    scaler = _make_grad_scaler(enabled=(amp_cfg and device.type == "cuda"))
 
     epochs = int(cfg["training"]["epochs"])
     ckpt_dir = Path(cfg["training"]["checkpoint_dir"])
@@ -234,7 +257,7 @@ def run_training(cfg: dict) -> None:
                     raise TypeError("objective attention_ce требует model.name attention_line_seq2seq")
                 tin_y, targ_y, m_ok = _prepare_attention_batches(model, charset, texts_batch, device, decoder_cap)
                 if use_amp:
-                    with torch.cuda.amp.autocast(enabled=True):
+                    with _autocast_cuda():
                         loss = model.compute_loss_ce(images, tin_y, targ_y, m_ok)
                     scaler.scale(loss).backward()
                     clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
@@ -255,7 +278,7 @@ def run_training(cfg: dict) -> None:
                 assert criterion is not None
                 targets_tl, tgt_lengths = _pack_targets(texts_batch, charset, device)
                 if use_amp:
-                    with torch.cuda.amp.autocast(enabled=True):
+                    with _autocast_cuda():
                         log_probs = model(images)
                         inp_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
                         batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)

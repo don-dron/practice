@@ -11,6 +11,10 @@ REM Снимки копируются в training\registry_snapshots\<метка
 cd /d "%~dp0.."
 set "PYTHONPATH=%CD%\src"
 
+python -c "import torch; import sys; print('torch.cuda.is_available=', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)" 2>nul
+if errorlevel 1 echo WARNING: PyTorch has no CUDA. Install GPU build from pytorch.org ^(pick CUDA matching your driver^). Training falls back to CPU.
+echo.
+
 set "SNAP=%CD%\training\registry_snapshots"
 if not exist "%SNAP%" mkdir "%SNAP%"
 
