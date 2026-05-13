@@ -1,0 +1,45 @@
+# §4.4 — двухэтапный контур страницы: детектор зон затем строковый блок §4.1–4.3 (YAML-заготовка для §5.1 до реализации).
+
+methodology_profile:
+  report_section: "4.4"
+  short_name: page_detector_then_line_recognizer
+  status: scaffold_yaml_only
+  note: Ключи ниже описывают планируемое разнесение второго этапа; активный код обучателя пока поддерживает только строковые датасеты kind=coco_lines.
+
+detector_training:
+  status: scaffold
+  coco_json_placeholder: ""  # путь к COCO full-page когда появится
+  image_root_placeholder: ""
+  batch_size_placeholder: null
+  epochs_placeholder: null
+  lr_placeholder: null
+
+line_recognizer_training_reference:
+  # Для воспроизводимости строкового блока после вырезаний использовать один из конфигов:
+  # configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml или последующую реализацию §4.2/4.3.
+  recommends_overlay_after_detector: configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml
+
+project:
+  seed: 42
+  device: "cuda"
+
+data:
+  kind: coco_lines
+  coco_json: "data/digital_peter/annotations_train.json"
+  image_root: "data/digital_peter/images"
+  text_field: "translation"
+  img_height: 32
+  max_width: 900
+  val_fraction: 0.03
+  num_workers: 0
+  augmentation_train: false
+
+model:
+  name: stub_section_4_4_detector_then_line
+
+training:
+  batch_size: 8
+  epochs: 10
+  lr: 0.001
+  experiment_name: "stub_report_section_4_4"
+  checkpoint_dir: "training/checkpoints/stub_sections"

@@ -1,0 +1,44 @@
+# Базовый конфиг пайплайна: наследуйте через другие YAML или перекройте ключи.
+
+project:
+  seed: 42
+  device: "cuda"  # cuda | cpu | mps
+
+data:
+  kind: coco_lines
+  coco_json: "data/digital_peter/annotations_train.json"
+  image_root: "data/digital_peter/images"
+  text_field: "translation"           # ключ внутри annotation["attributes"]
+  split_annotation: null               # если null — все аннотации из файла как один сплит
+  img_height: 32
+  max_width: 1200                       # ограничение по ширине после масштабирования высоты
+  min_crop_width: 4
+  val_fraction: 0.05                   # простой случайный hold-out если отдельного val-json нет
+  num_workers: 2
+  augmentation_train: false
+
+charset:
+  # если пусто — алфавит собирается по обучающей выборке перед стартом
+  extra_chars: ""
+
+model:
+  name: crnn_ctc
+  cnn_channels: [64, 128, 256, 256]
+  lstm_hidden: 256
+  lstm_layers: 2
+  dropout: 0.0
+
+training:
+  batch_size: 16
+  epochs: 5
+  lr: 0.0005
+  weight_decay: 0.0
+  clip_grad_norm: 5.0
+  checkpoint_dir: "training/checkpoints"
+  experiment_name: "run"
+  save_every_epochs: 1
+  amp: false
+
+infer:
+  checkpoint: "training/checkpoints/latest.pt"
+  beam_size: 1

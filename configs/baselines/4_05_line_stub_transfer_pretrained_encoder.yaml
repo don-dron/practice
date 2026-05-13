@@ -1,0 +1,39 @@
+# §4.5 — трансфер предобученного кодировщика OCR или близкой зрительной задачи дообучением на смеси §3 (YAML до реализации загрузки весов).
+
+methodology_profile:
+  report_section: "4.5"
+  short_name: transfer_pretrained_visual_encoder_then_finetune
+  status: scaffold_yaml_only
+  note: По готовности кода перенести реальные пути freeze_policy и warmup в ключи ниже без изменения схемы слияния YAML.
+
+planned_transfer_policy:
+  backbone_checkpoint_or_url: ""
+  backbone_topology_reference: совпадает с выбранной реализацией §4.2 или §4.3
+  freeze_encoder_until_epoch: null
+  encoder_lr_multiplier: null
+  decoder_head_lr_multiplier: null
+
+project:
+  seed: 42
+  device: "cuda"
+
+data:
+  kind: coco_lines
+  coco_json: "data/digital_peter/annotations_train.json"
+  image_root: "data/digital_peter/images"
+  text_field: "translation"
+  img_height: 32
+  max_width: 900
+  val_fraction: 0.03
+  num_workers: 0
+  augmentation_train: false
+
+model:
+  name: stub_section_4_5_transfer_pretrained_line_encoder
+
+training:
+  batch_size: 8
+  epochs: 10
+  lr: 0.001
+  experiment_name: "stub_report_section_4_5"
+  checkpoint_dir: "training/checkpoints/stub_sections"
