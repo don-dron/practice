@@ -182,7 +182,18 @@ def run_training(cfg: dict) -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    device = torch.device(pick_device(cfg["project"].get("device", "cuda")))
+    device_pref = cfg["project"].get("device", "cuda")
+    resolved = pick_device(device_pref)
+    device = torch.device(resolved)
+    print(
+        f"[htr-train] device: requested={device_pref!r} -> {device!r} "
+        f"(torch.cuda.is_available={torch.cuda.is_available()})"
+    )
+    if device_pref == "cuda" and not torch.cuda.is_available():
+        print(
+            "[htr-train] WARNING: CUDA requested but not available; training on CPU. "
+            "Install GPU build: https://pytorch.org/get-started/locally/"
+        )
     model = resolve_model(cfg, charset.num_classes).to(device)
 
     freeze_ep = _freeze_backbone_epochs(cfg)
