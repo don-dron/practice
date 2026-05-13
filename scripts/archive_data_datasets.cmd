@@ -1,6 +1,6 @@
 @echo off
 REM Windows: аналог scripts/archive_data_datasets.sh (pack | fetch).
-REM Требуется curl.exe и tar.exe (Windows 10+), для fetch — доступный powershell.exe
+REM Требуется curl.exe и %SystemRoot%\System32\tar.exe (не tar из Git ^— иначе часто ломается^), powershell.exe
 REM только одной строкой — запрос JSON с Яндекса (.ps1-файл не нужен).
 REM
 REM   scripts\archive_data_datasets.cmd fetch
@@ -30,12 +30,12 @@ goto UsageFail
 pushd "%ROOT%"
 set COPYFILE_DISABLE=1
 echo Создание: practice_data_datasets.tar.gz (может быть несколько ГБ^)...
-tar -czf "%ROOT%\practice_data_datasets.tar.gz" ^
-  "data/digital_peter" ^
-  "data/yenisei_gov_reports_td" ^
-  "data/russian_old_orthography_ocr"
+set "WTAR=%SystemRoot%\System32\tar.exe"
+if not exist "!WTAR!" set "WTAR=tar"
+"!WTAR!" -czf "%ROOT%\practice_data_datasets.tar.gz" "data/digital_peter" "data/yenisei_gov_reports_td" "data/russian_old_orthography_ocr"
+set "TA=!errorlevel!"
 popd
-if errorlevel 1 (
+if not "!TA!"=="0" (
   echo Ошибка tar ^(pack^).
   exit /b 1
 )
@@ -86,10 +86,17 @@ if errorlevel 1 (
 )
 
 echo Распаковка архива во временную папку...
-pushd "!TMPD!"
-tar.exe -xzf "!DOWN!"
+set "WTAR=%SystemRoot%\System32\tar.exe"
+if not exist "!WTAR!" set "WTAR=tar"
+set "_BACK=%CD%"
+cd /d "!TMPD!"
+if errorlevel 1 (
+  echo Не удалось cd во временный каталог: !TMPD!
+  exit /b 1
+)
+"!WTAR!" -xzf "!DOWN!"
 set "_T=!errorlevel!"
-popd
+cd /d "!_BACK!"
 if not "!_T!"=="0" (
   rd /s /q "!TMPD!" 2>nul
   echo Ошибка tar при распаковке.

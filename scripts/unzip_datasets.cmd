@@ -1,51 +1,44 @@
 @echo off
-REM Аналог scripts/unzip_datasets.sh — только cmd + tar.exe (ZIP тоже умеет).
+REM Аналог scripts/unzip_datasets.sh.
+REM ZIP только через PowerShell Expand-Archive ^(не tar: иначе Git/cygwin tar в PATH даёт "Couldn't visit directory"^).
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0.."
 set "ROOT=%CD%"
 set "D=%ROOT%\data"
 
-call :UnzipQuiet "%D%\digital_peter\images.zip" "%D%\digital_peter"
+call :UnzipOne "%D%\digital_peter\images.zip" "%D%\digital_peter"
 if errorlevel 1 exit /b 1
-call :UnzipQuiet "%D%\yenisei_gov_reports_td\test_images.zip" "%D%\yenisei_gov_reports_td"
+call :UnzipOne "%D%\yenisei_gov_reports_td\test_images.zip" "%D%\yenisei_gov_reports_td"
 if errorlevel 1 exit /b 1
-call :UnzipQuiet "%D%\yenisei_gov_reports_td\train_images.zip" "%D%\yenisei_gov_reports_td"
+call :UnzipOne "%D%\yenisei_gov_reports_td\train_images.zip" "%D%\yenisei_gov_reports_td"
 if errorlevel 1 exit /b 1
-call :UnzipQuiet "%D%\russian_old_orthography_ocr\books-pdf-plaintext.zip" "%D%\russian_old_orthography_ocr"
+call :UnzipOne "%D%\russian_old_orthography_ocr\books-pdf-plaintext.zip" "%D%\russian_old_orthography_ocr"
 if errorlevel 1 exit /b 1
-call :UnzipQuiet "%D%\russian_old_orthography_ocr\pages-img-plaintext.zip" "%D%\russian_old_orthography_ocr"
+call :UnzipOne "%D%\russian_old_orthography_ocr\pages-img-plaintext.zip" "%D%\russian_old_orthography_ocr"
 if errorlevel 1 exit /b 1
 
 if exist "%D%\digital_peter\__MACOSX" rd /s /q "%D%\digital_peter\__MACOSX"
 echo Готово. Проверьте data\digital_peter\images и остальные каталоги.
 exit /b 0
 
-:UnzipQuiet
-set "ZIP=%~1"
-set "DEST=%~2"
-if not exist "!ZIP!" (
-  echo Пропуск ^(нет файла^): !ZIP!
+:UnzipOne
+for %%I in ("%~1") do set "_Z=%%~fI"
+for %%I in ("%~2\.") do set "_D=%%~fI"
+if not exist "!_Z!" (
+  echo Пропуск ^(нет файла^): !_Z!
   exit /b 0
 )
-echo Распаковка: !ZIP! -^> !DEST!
-mkdir "%DEST%" 2>nul
-REM Встроенный tar иногда не тянет отдельные ZIP ^(Deflate64, AES и т.п.^): тогда Expand-Archive.
-set "UNZIP_LITERAL_ZIP=!ZIP!"
-set "UNZIP_LITERAL_DST=!DEST!"
-pushd "!DEST!"
-tar.exe -xf "!ZIP!"
-set "UT=!errorlevel!"
-popd
-if not "!UT!"=="0" (
-  echo tar не смог ZIP — пробуем Expand-Archive ^(как unzip под Linux^)...
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Stop'; $z = $Env:UNZIP_LITERAL_ZIP; $d = $Env:UNZIP_LITERAL_DST; Expand-Archive -LiteralPath $z -DestinationPath $d -Force }"
-  if errorlevel 1 (
-    echo Ошибка распаковки ZIP ^(tar и Expand-Archive^): !ZIP!
-    set "UNZIP_LITERAL_ZIP="
-    set "UNZIP_LITERAL_DST="
-    exit /b 1
-  )
+echo Распаковка: !_Z! -^> !_D!
+if not exist "!_D!" mkdir "!_D!"
+set "EA_ZIP=!_Z!"
+set "EA_DST=!_D!"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "& { $ErrorActionPreference='Stop'; $z=$Env:EA_ZIP; $d=$Env:EA_DST; if ([string]::IsNullOrWhiteSpace($z) -or [string]::IsNullOrWhiteSpace($d)) { exit 2 }; Expand-Archive -LiteralPath $z -DestinationPath $d -Force }"
+set "PSX=!errorlevel!"
+set "EA_ZIP="
+set "EA_DST="
+if not "!PSX!"=="0" (
+  echo Ошибка Expand-Archive ^(powershell^), код !PSX! : !_Z!
+  exit /b 1
 )
-set "UNZIP_LITERAL_ZIP="
-set "UNZIP_LITERAL_DST="
 exit /b 0

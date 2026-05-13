@@ -21,7 +21,7 @@ scripts\unzip_datasets.cmd
 
 Для `fetch` нужен однократный вызов `powershell.exe`, встроенного в систему — это только строка получения JSON с Яндекс.Диска; отдельные `.ps1` в репозитории не используются.
 
-Далее один раз распакуйте вложенные ZIP: на Unix — `./scripts/unzip_datasets.sh`, на Windows — `scripts\unzip_datasets.cmd` (если чего‑то не хватает — запустите команду снова; перенос данных с `%TEMP%` идёт через `robocopy`, а при «битом» ZIP сначала `tar`, при ошибке — `Expand-Archive`).
+Далее один раз распакуйте вложенные ZIP: на Unix — `./scripts/unzip_datasets.sh`, на Windows — `scripts\unzip_datasets.cmd` (ZIP через `Expand-Archive` в PowerShell; большой `tar.gz` из `fetch` распаковывается системным `%SystemRoot%\System32\tar.exe`, не `tar` из Git). Перенос во `data\` после `fetch` — `robocopy`.
 
 Параметр `pack` (или запуск без аргументов) делает обратную операцию: собирает локальные три папки в `practice_data_datasets.tar.gz` — нужен только при подготовке архива для обмена или облака, не для типичной настройки окружения.
 
