@@ -31,20 +31,20 @@ scripts\unzip_datasets.cmd
 
 ```bash
 python -m pip install -e .
-htr-train --config configs/default.yaml --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml --epochs 30 --device cpu
+htr-train --config configs/default.yaml --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml --epochs 40 --device cpu
 htr-infer --checkpoint training/checkpoints/latest.pt path/to/crop_line.png
 ```
 
 Эквивалент более короткой цепочки (алиас профилю §4.1):
 
 ```bash
-htr-train --config configs/default.yaml --config configs/digital_peter_line_ctc.yaml --epochs 30 --device cpu
+htr-train --config configs/default.yaml --config configs/digital_peter_line_ctc.yaml --epochs 40 --device cpu
 ```
 
 Без установки editable:
 
 ```bash
-PYTHONPATH=src python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml --epochs 30 --device cpu
+PYTHONPATH=src python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml --epochs 40 --device cpu
 PYTHONPATH=src python -m htr.cli infer_main --checkpoint training/checkpoints/latest.pt path/to/crop_line.png
 ```
 

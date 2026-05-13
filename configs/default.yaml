@@ -31,8 +31,8 @@ model:
   dropout: 0.0
 
 training:
-  batch_size: 96
-  epochs: 30
+  batch_size: 192
+  epochs: 40
   lr: 0.0005
   weight_decay: 0.0
   clip_grad_norm: 5.0

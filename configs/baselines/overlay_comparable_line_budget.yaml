@@ -8,6 +8,6 @@ data:
   num_workers: 12
 
 training:
-  batch_size: 96
-  epochs: 30
+  batch_size: 192
+  epochs: 40
   lr: 0.001
