@@ -14,9 +14,10 @@ data:
   max_width: 1200                       # ограничение по ширине после масштабирования высоты
   min_crop_width: 4
   val_fraction: 0.05                   # простой случайный hold-out если отдельного val-json нет
-  num_workers: 8
+  num_workers: 12
 
   augmentation_train: false
+  prefetch_factor: 6
 
 charset:
   # если пусто — алфавит собирается по обучающей выборке перед стартом
@@ -30,7 +31,7 @@ model:
   dropout: 0.0
 
 training:
-  batch_size: 32
+  batch_size: 48
   epochs: 20
   lr: 0.0005
   weight_decay: 0.0
@@ -39,6 +40,8 @@ training:
   experiment_name: "run"
   save_every_epochs: 1
   amp: true
+  cudnn_benchmark: true
+  allow_tf32: true
 
 infer:
   checkpoint: "training/checkpoints/latest.pt"

@@ -69,8 +69,7 @@ htr-train --config configs\default.yaml --device cuda
 6) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
 ==================================================================
 Ниже — те же связки, что в п. 5.1.2 и блоке команд там; при желании добавьте
-единые параметры в конец каждой строки при необходимости:  --epochs 20 --device cuda  (в базовых YAML: batch_size обычно 24–32, num_workers 8 по умолчанию, AMP по умолчанию на CUDA; при OOM — свой --batch-size поменьше; больше загрузка CPU: в YAML `num_workers: 12` и/или `augmentation_train: true`; на Windows см. `HTR_WIN_MAX_NUM_WORKERS` в коде htr-train).
-
+единые параметры в конец каждой строки при необходимости:  --epochs 20 --device cuda  (пропускная способность: цель быстрее кормить GPU — в ``default.yaml`` больше ``num_workers``/``batch``, DataLoader с ``persistent_workers`` и ``prefetch_factor``, AMP и TF32; при полной занятости GPU низкая средняя загрузка CPU нормальна; без потолка воркеров на Win: ``set HTR_WIN_MAX_NUM_WORKERS=0``; при OOM уменьшить ``batch_size``).
 Обучаемые связки T0–E2 и профили регистра S2–S5 (добавьте префиксы `--device cuda` и нужные `--epochs`, `--batch-size`):
 
 htr-train --config configs\default.yaml

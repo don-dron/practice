@@ -186,7 +186,7 @@ def run_training(cfg: dict) -> None:
     if sys.platform == "win32":
         _cap_raw = os.environ.get("HTR_WIN_MAX_NUM_WORKERS", "").strip()
         if _cap_raw != "0":
-            _cap = 12
+            _cap = 16
             if _cap_raw != "":
                 try:
                     _cap = max(1, min(32, int(_cap_raw)))
@@ -200,26 +200,45 @@ def run_training(cfg: dict) -> None:
                 nw = _cap
     bs = int(cfg["training"]["batch_size"])
 
-    loader_train = DataLoader(
-        train_ds,
-        shuffle=True,
-        batch_size=bs,
-        num_workers=nw,
-        collate_fn=coco_collate_fn,
-        pin_memory=torch.cuda.is_available(),
-    )
+    _pin_memory = torch.cuda.is_available()
+    _dl_common: dict = {
+        "num_workers": nw,
+        "collate_fn": coco_collate_fn,
+        "pin_memory": _pin_memory,
+    }
+    if nw > 0:
+        _dl_common["persistent_workers"] = True
+        try:
+            _pf = max(2, min(16, int(dc.get("prefetch_factor", 4))))
+        except (TypeError, ValueError):
+            _pf = 4
+        _dl_common["prefetch_factor"] = _pf
+
+    loader_train = DataLoader(train_ds, shuffle=True, batch_size=bs, **_dl_common)
     loader_val = DataLoader(
         val_ds,
         shuffle=False,
         batch_size=max(1, bs // 2),
-        num_workers=nw,
-        collate_fn=coco_collate_fn,
-        pin_memory=torch.cuda.is_available(),
+        **_dl_common,
     )
+    if nw > 0:
+        print(
+            f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
+            "persistent_workers=true"
+        )
 
     device_pref = cfg["project"].get("device", "cuda")
     resolved = pick_device(device_pref)
     device = torch.device(resolved)
+
+    tc = cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
+    if device.type == "cuda":
+        if tc.get("cudnn_benchmark", True):
+            torch.backends.cudnn.benchmark = True
+        if tc.get("allow_tf32", True):
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
     print(
         f"[htr-train] device: requested={device_pref!r} -> {device!r} "
         f"(torch.cuda.is_available={torch.cuda.is_available()})"
