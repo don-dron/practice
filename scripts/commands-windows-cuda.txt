@@ -121,6 +121,8 @@ scripts\train_registry_all.cmd --device cuda
 
 По умолчанию, если аргументов нет, скрипт сам подставляет --device cuda.
 
+Если torch.cuda.is_available=False, скрипт завершится кодом 2 с подсказкой по PyTorch+CUDA. Намеренно на CPU: set TRAIN_REGISTRY_ALLOW_CPU=1 или --device cpu.
+
 Снимки каждой модели сохраняются в папку training\registry_snapshots\ (файлы вида T0_latest.pt, E1_latest.pt, …), чтобы поток прогонов не затирал последний чекпоинт.
 
 Опционально из cmd до вызова задать переменные окружения (эквивалент bash):
