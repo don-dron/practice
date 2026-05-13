@@ -5,7 +5,7 @@
 ---------------------
 - NVIDIA Driver (актуальный с сайта NVIDIA).
 - Python 3.9–3.12 с python.org («Add Python to PATH» при установке) или установка только для пользователя и явный PATH.
-- Git (опционально, для clone). Архив с данными скачиваете как уже делаете (скрипт .sh ниже нужен через Git Bash или WSL).
+- Git (опционально, для clone). Данные: из корня репозитория `scripts\archive_data_datasets.cmd fetch`, затем `scripts\unzip_datasets.cmd` (см. README); при желании можно те же действия выполнить через Git Bash или WSL и `./scripts/*.sh`.
 
 
 1) Каталог проекта и виртуальное окружение (cmd.exe)
@@ -47,16 +47,16 @@ pip install -e .
 
 Вариант A — если команда htr-train появилась после pip install (предпочтительно):
 
-htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 10 --batch-size 8
+htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 20 --batch-size 8
 
 Вариант B — без установки editable, из корня репозитория (cmd), с PYTHONPATH:
 
 set PYTHONPATH=%CD%\src
-python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 10 --batch-size 8
+python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 20 --batch-size 8
 
 Вариант C — полный путь к Launcher в venv (если activate не добавил Scripts в PATH):
 
-.\.venv\Scripts\htr-train.exe --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 10 --batch-size 8
+.\.venv\Scripts\htr-train.exe --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 20 --batch-size 8
 
 Чекпоинты по умолчанию: training\checkpoints\latest.pt
 
@@ -69,7 +69,7 @@ htr-train --config configs\default.yaml --device cuda
 6) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
 ==================================================================
 Ниже — те же связки, что в п. 5.1.2 и блоке команд там; при желании добавьте
-единые параметры в конец каждой строки, например:  --epochs 10 --batch-size 8 --device cuda
+единые параметры в конец каждой строки, например:  --epochs 20 --batch-size 8 --device cuda
 
 Обучаемые связки T0–E2 и профили регистра S2–S5 (добавьте префиксы `--device cuda` и нужные `--epochs`, `--batch-size`):
 
@@ -134,9 +134,14 @@ scripts\train_registry_all.cmd --device cuda
 Полный бюджет эпох берётся из YAML, если не задано TRAIN_REGISTRY_EPOCHS. Для связки S5 при первом запуске может потребоваться загрузка весов ResNet (нужен интернет, пока кэш torchvision пуст).
 
 
-11) Bash-скрипты данных на Windows
-----------------------------------
-Файлы archive_data_datasets.sh и unzip_datasets.sh удобно запускать из Git Bash в корне репозитория или из WSL, либо вручную распаковать архив в data\ согласно README.
+11) Скачивание данных на Windows (без Git Bash)
+-----------------------------------------------
+Из корня репозитория в cmd:
+
+scripts\archive_data_datasets.cmd fetch
+scripts\unzip_datasets.cmd
+
+Альтернатива: archive_data_datasets.sh и unzip_datasets.sh из Git Bash или WSL.
 
 
 Примечания

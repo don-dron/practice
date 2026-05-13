@@ -427,7 +427,7 @@ htr-train --config configs/default.yaml --config configs/baselines/4_05_line_stu
 | `data.val_fraction` | 0,05 | 0,03 |
 | `data.num_workers` | 2 | 0 |
 | `training.batch_size` | 16 | 8 |
-| `training.epochs` | 5 | 10 |
+| `training.epochs` | 20 | 20 |
 | `training.lr` | 5·10⁻⁴ | 10⁻³ |
 | `training.experiment_name` | `run` (значение в `configs/default.yaml`) | `dpeter_crnn_ctc` |
 
