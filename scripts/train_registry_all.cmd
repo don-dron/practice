@@ -11,7 +11,8 @@ REM Allow CPU-only run without pip: set TRAIN_REGISTRY_ALLOW_CPU=1 ^|^| pass --d
 REM Quieter pip: set TRAIN_REGISTRY_PIP_QUIET=1  ^(adds -q^)
 REM Exit codes from :ensure_torch_cuda: 0 OK, 1 pip/venv failure, 2 CUDA false after wheels
 
-cd /d "%~dp0\.."
+cd /d "%~dp0"
+cd /d ".."
 set "REPO_ROOT=%CD%"
 set "PYTHONPATH=%REPO_ROOT%\src"
 
@@ -41,36 +42,42 @@ if defined TRAIN_REGISTRY_DEVICE set "OPTS=!OPTS! --device !TRAIN_REGISTRY_DEVIC
 if defined TRAIN_REGISTRY_EPOCHS set "OPTS=!OPTS! --epochs !TRAIN_REGISTRY_EPOCHS!"
 if defined TRAIN_REGISTRY_BATCH set "OPTS=!OPTS! --batch-size !TRAIN_REGISTRY_BATCH!"
 
-set "USER=%*"
+set "CLI_ARGS=%*"
 set "ALL=!OPTS!"
-if not "!USER!"=="" set "ALL=!ALL! !USER!"
+if not "!CLI_ARGS!"=="" set "ALL=!ALL! !CLI_ARGS!"
 if "!ALL!"=="" set "ALL=--device cuda"
 
 REM ---- Pip / CUDA bootstrap for GPU runs ----
+REM Flat flow (no nested IF parens): avoids fragile cmd parsers on some locales / PowerShell-invoked CMD.
 echo !ALL! | findstr /i /c:"--device cpu" >nul
-if errorlevel 1 (
-  REM default path: wants GPU
-  if not defined TRAIN_REGISTRY_SKIP_CUDA_PIP (
-    call :ensure_torch_cuda "!EXE_PY!"
-    REM IF ERRORLEVEL n is true when exit code GE n ; test higher codes first.
-    if errorlevel 2 (
-      echo [train_registry] CUDA not usable: torch.cuda.is_available is False after cu124/cu121. See hints above ^(GPU/driver^?). Use --device cpu or TRAIN_REGISTRY_ALLOW_CPU=1.
-      exit /b 5
-    )
-    if errorlevel 1 (
-      echo [train_registry] pip / venv bootstrap failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for verbose pip^).
-      exit /b 4
-    )
-  )
-  "!EXE_PY!" -c "import torch; import sys; print('torch.cuda.is_available=', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)"
-  if errorlevel 1 (
-    if not defined TRAIN_REGISTRY_ALLOW_CPU (
-      echo ERROR: CUDA still not available after bootstrap. Set TRAIN_REGISTRY_SKIP_CUDA_PIP=0 removed^? Try manual pip from pytorch.org
-      exit /b 3
-    )
-    echo WARNING: continuing on CPU ^(TRAIN_REGISTRY_ALLOW_CPU=1^).
-  )
+if errorlevel 1 goto gpu_wants_cuda
+goto after_gpu_cuda_bootstrap
+
+:gpu_wants_cuda
+if defined TRAIN_REGISTRY_SKIP_CUDA_PIP goto after_ensure_torch_cuda
+call :ensure_torch_cuda "!EXE_PY!"
+if errorlevel 2 (
+  echo [train_registry] CUDA not usable: torch.cuda.is_available is False after cu124/cu121. See hints above ^(GPU/driver^?). Use --device cpu or TRAIN_REGISTRY_ALLOW_CPU=1.
+  exit /b 5
 )
+if errorlevel 1 (
+  echo [train_registry] pip / venv bootstrap failed - see stderr and steps above ^(omit TRAIN_REGISTRY_PIP_QUIET for verbose pip^).
+  exit /b 4
+)
+:after_ensure_torch_cuda
+"!EXE_PY!" -c "import torch; import sys; print('torch.cuda.is_available=', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)"
+if errorlevel 1 goto cuda_still_bad_after_verify
+goto after_gpu_cuda_bootstrap
+
+:cuda_still_bad_after_verify
+if defined TRAIN_REGISTRY_ALLOW_CPU goto allow_cpu_after_cuda_fail
+echo ERROR: CUDA still not available after bootstrap. Set TRAIN_REGISTRY_SKIP_CUDA_PIP=0 removed^? Try manual pip from pytorch.org
+exit /b 3
+
+:allow_cpu_after_cuda_fail
+echo WARNING: continuing on CPU ^(TRAIN_REGISTRY_ALLOW_CPU=1^).
+
+:after_gpu_cuda_bootstrap
 
 echo.
 echo PYTHONPATH=%PYTHONPATH%
