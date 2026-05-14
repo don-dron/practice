@@ -37,7 +37,8 @@ data:
   # CPU на тот же темп — дать заполниться preprocessed_cache_dir (после 1-го прохода декода меньше).
   # PNG-heavy: decode всё ещё на CPU (libpng); GPU грузится сильнее после заполнения preprocessed_cache_dir или при JPEG.
   # Поднять num_workers / SSD; оффлайн конверт PNG→JPEG для COCO ускоряет подачу (nvJPEG в collate).
-  num_workers: 96
+  # Меньше параллельных воркеров с GPU-collate → меньше VRAM; на сильном CPU поднимите при отсутствии OOM.
+  num_workers: 16
   # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU).
   # auto — при training.hardware_utilization: max; иначе трактуется как 1. Явное число | 0 — не трогать воркер.
   dataloader_worker_torch_threads: auto
@@ -67,10 +68,11 @@ model:
 training:
   # normal | max | low — по умолчанию max: авто main/interop/OMP, prefetch/worker threads auto; для слабой машины: normal
   hardware_utilization: max
-  # На Google Colab см. оверлей configs/colab.yaml — меньший batch (default здесь под мощный сервер).
-  batch_size: 1728
+  # Было 1728 — тяжело по VRAM при GPU-collate; 512 + lr ниже. Сильный сервер без OOM можно поднять.
+  batch_size: 512
   epochs: 20
-  lr: 0.0005
+  # Линейно от прежних 0.0005 @ batch 1728 (~0.000148); подстройте при «плывущем» loss.
+  lr: 0.00015
   weight_decay: 0.0
   clip_grad_norm: 5.0
   checkpoint_dir: "training/checkpoints"
@@ -83,7 +85,7 @@ training:
   cuda_line_resize_on_device: true
   # Пока GPU считает батч N, фоновый поток подтягивает следующие CPU-батчи из DataLoader (CUDA/MPS).
   async_training_batch_prefetch: true
-  async_prefetch_queue_size: 2
+  async_prefetch_queue_size: 1
   # Параллельное чтение только текстов для алфавита (индексы образов не трогаются); для >4096 строк и max/флага
   parallel_charset_text_reads: true
   cudnn_benchmark: true

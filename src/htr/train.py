@@ -777,6 +777,12 @@ def run_training(cfg: dict) -> None:
             print(
                 "[htr-train] линии: промах u8-кэша — JPEG decode_jpeg(CUDA); PNG — decode_png→CUDA, ресайз/нормализация на GPU."
             )
+            print(
+                "[htr-train] VRAM: collate в воркерах использует CUDA — память делит несколько процессов с обучением. "
+                "При OutOfMemory: уменьшите training.batch_size, data.num_workers, async_prefetch_queue_size; "
+                "не запускайте второй эксперимент на той же GPU; при фрагментации: "
+                "PYTORCH_ALLOC_CONF=expandable_segments:True"
+            )
         else:
             print(
                 "[htr-train] линии: float-линия на GPU после кропа; "
