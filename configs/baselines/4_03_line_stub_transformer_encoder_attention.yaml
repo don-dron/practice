@@ -37,7 +37,7 @@ model:
 training:
   objective: ctc
   batch_size: 54
-  epochs: 5
+  epochs: 20
   lr: 0.001
   experiment_name: "transformer_encoder_section43"
   checkpoint_dir: "training/checkpoints"

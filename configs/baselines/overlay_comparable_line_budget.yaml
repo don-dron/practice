@@ -9,5 +9,5 @@ data:
 
 training:
   batch_size: 144
-  epochs: 5
+  epochs: 20
   lr: 0.001
