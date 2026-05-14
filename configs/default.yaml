@@ -6,7 +6,8 @@ project:
 
 data:
   kind: coco_lines
-  # По умолчанию — три корпуса (два COCO-строк + страницы PNG+TXT). Для профилей на одном наборе в оверлее задайте data.sources: null.
+  # По умолчанию — три корпуса (два COCO-строк + страницы PNG+TXT). Оверлеи не трогают sources → обучение остаётся на всех трёх.
+  # Чтобы брать только один набор после merge, переопределите data.sources явным одноэлементным списком.
   sources:
     - kind: coco_lines
       coco_json: "data/yenisei_gov_reports_td/train.json"

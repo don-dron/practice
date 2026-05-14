@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Последовательно обучает все связки регистра §5.1 (T0, E1, E1*, E2, S2–S5).
+# Все шаги используют data.sources из configs/default.yaml (обычно три корпуса), если второй YAML не переопределяет sources целиком.
 # Запуск из корня репозитория: ./scripts/train_registry_all.sh [--epochs N] [--batch-size N] [--device cuda|cpu|mps]
 #
 # По умолчанию эпохи и batch из YAML.

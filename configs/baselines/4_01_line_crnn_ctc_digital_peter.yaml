@@ -12,7 +12,6 @@ project:
   device: "cuda"
 
 data:
-  sources: null
   kind: coco_lines
   coco_json: "data/yenisei_gov_reports_td/train.json"
   image_root: "data/yenisei_gov_reports_td/train_images"
