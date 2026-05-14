@@ -22,6 +22,7 @@ from htr.data.coco_lines import (
 )
 from htr.cuda_line_batch import (
     LINE_PREP_KEY,
+    LINE_PREP_PNG_PAGE,
     LINE_PREP_TENSOR,
     LINE_PREP_UINT8,
     U8_KIND_KEY,
@@ -101,6 +102,7 @@ class PageTxtPairsDataset(Dataset):
         cache_namespace: str = "page_txt",
         max_text_chars: Optional[int] = None,
         defer_resize_normalize_to_cuda: bool = False,
+        defer_png_bytes_to_collate: bool = False,
     ):
         self.pair_root = Path(pair_root).expanduser().resolve()
         self.samples = discover_page_txt_pairs(self.pair_root)
@@ -115,6 +117,9 @@ class PageTxtPairsDataset(Dataset):
         self._cache_namespace = (cache_namespace or "").strip()
         self.max_text_chars = max_text_chars
         self._defer_resize_cuda = bool(defer_resize_normalize_to_cuda)
+        self._png_bytes_collate = bool(defer_png_bytes_to_collate)
+        if self._png_bytes_collate and not self._defer_resize_cuda:
+            raise ValueError("defer_png_bytes_to_collate требует defer_resize_normalize_to_cuda=True")
 
         rc = preprocessed_cache_dir
         self.preprocessed_cache_root: Optional[Path] = None
@@ -320,6 +325,14 @@ class PageTxtPairsDataset(Dataset):
                             if ram is not None:
                                 ram.put_u8(key_hex, payload, ch_, cw_)
                             return pack_u8(payload, cw_, text)
+            if self._png_bytes_collate and self.train_augment is None:
+                data = png_path.read_bytes()
+                jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                return {
+                    LINE_PREP_KEY: LINE_PREP_PNG_PAGE,
+                    "png_bytes": jb,
+                    "text": text,
+                }
             u8, out_w = self._load_image_uint8(png_path)
             if ram is not None and key_hex:
                 _c, hh, ww = u8.shape

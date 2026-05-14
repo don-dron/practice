@@ -19,6 +19,7 @@ from htr.transforms import TrainAugmentation
 from htr.cuda_line_batch import (
     LINE_PREP_JPEG_CUDA,
     LINE_PREP_KEY,
+    LINE_PREP_PNG_CROP,
     LINE_PREP_TENSOR,
     LINE_PREP_UINT8,
     U8_KIND_COCO_CROP,
@@ -416,18 +417,6 @@ class COCOLinesDataset(Dataset):
         fname, text, bbox = self.samples[idx]
         img_path = self.image_root / fname
 
-        if self._jpeg_cuda and self.train_augment is None:
-            sfx = Path(fname).suffix.lower()
-            if sfx in (".jpg", ".jpeg"):
-                data = img_path.read_bytes()
-                jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
-                return {
-                    LINE_PREP_KEY: LINE_PREP_JPEG_CUDA,
-                    "jpeg_bytes": jb,
-                    "bbox": bbox,
-                    "text": text,
-                }
-
         ram = self._ram_lru
         cache_root = self.preprocessed_cache_root
         defer = self._defer_resize_cuda
@@ -490,6 +479,28 @@ class COCOLinesDataset(Dataset):
                             if ram is not None:
                                 ram.put_u8(key_hex, payload, ch_, cw_)
                             return _u8_item(payload)
+
+            # Промах кэша: JPEG — байты → collate decode_jpeg(CUDA); PNG — байты → decode_png→CUDA; иначе CPU-декод.
+            if self._jpeg_cuda and self.train_augment is None:
+                sfx = Path(fname).suffix.lower()
+                if sfx in (".jpg", ".jpeg"):
+                    data = img_path.read_bytes()
+                    jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                    return {
+                        LINE_PREP_KEY: LINE_PREP_JPEG_CUDA,
+                        "jpeg_bytes": jb,
+                        "bbox": bbox,
+                        "text": text,
+                    }
+                if sfx == ".png":
+                    data = img_path.read_bytes()
+                    jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                    return {
+                        LINE_PREP_KEY: LINE_PREP_PNG_CROP,
+                        "png_bytes": jb,
+                        "bbox": bbox,
+                        "text": text,
+                    }
 
             gray_u8 = self._load_sample_gray_u8(img_path, bbox)
             if ram is not None and key_hex:

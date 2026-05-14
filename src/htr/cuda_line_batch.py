@@ -1,8 +1,8 @@
-"""Перенос интерполяции и нормализации линии на CUDA (JPEG-декод по-прежнему на CPU в воркерах даталоадера)."""
+"""Интерполяция и нормализация линии на GPU; batched decode_jpeg(CUDA); PNG — decode_png (CPU lib) → сразу CUDA → обработка на GPU."""
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Union, cast
+from typing import Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import torch
 import torch.nn.functional as F
@@ -11,6 +11,8 @@ LINE_PREP_KEY = "line_prep"
 LINE_PREP_TENSOR = "tensor"
 LINE_PREP_UINT8 = "uint8"
 LINE_PREP_JPEG_CUDA = "jpeg_cuda"
+LINE_PREP_PNG_CROP = "png_crop"
+LINE_PREP_PNG_PAGE = "png_page"
 U8_KIND_KEY = "u8_kind"
 U8_KIND_COCO_CROP = "coco_crop"
 U8_KIND_PAGE_READY = "page_ready"
@@ -159,13 +161,61 @@ def _line_tensor_from_rgb_chw_cuda(
     sl = chw_uint8[:, top:bottom, left:right]
     if sl.numel() == 0:
         raise RuntimeError("пустой crop после bbox")
-    x01 = sl.float().div_(255.0)
+    if sl.dtype == torch.uint16:
+        x01 = sl.float().div_(65535.0)
+    else:
+        x01 = sl.float().div_(255.0)
     if sl.shape[0] == 3:
         gray01 = 0.2989 * x01[0:1] + 0.5870 * x01[1:2] + 0.1140 * x01[2:3]
     else:
         gray01 = x01
     _, hi, wi_src = gray01.shape
     new_w = max(1, round(float(wi_src) * float(img_height) / float(max(hi, 1))))
+    if max_width is not None:
+        new_w = min(new_w, int(max_width))
+    y = F.interpolate(gray01.unsqueeze(0), size=(img_height, new_w), mode="bilinear", align_corners=False).squeeze(0)
+    y = y.mul_(2.0).sub_(1.0)
+    return y.unsqueeze(0)
+
+
+def _chw_to_gray01_float(chw: torch.Tensor) -> torch.Tensor:
+    """CHW на одном device; uint8 / uint16 / float."""
+    if chw.dtype == torch.uint16:
+        x01 = chw.float().div_(65535.0)
+    elif chw.dtype == torch.uint8:
+        x01 = chw.float().div_(255.0)
+    else:
+        x01 = chw.float()
+    c = int(x01.shape[0])
+    if c == 3:
+        return 0.2989 * x01[0:1] + 0.5870 * x01[1:2] + 0.1140 * x01[2:3]
+    if c == 1:
+        return x01
+    if c == 4:
+        return 0.2989 * x01[0:1] + 0.5870 * x01[1:2] + 0.1140 * x01[2:3]
+    raise RuntimeError(f"неожиданное число каналов после decode_png: {c}")
+
+
+def _page_png_bytes_to_line_tensor_cuda(
+    png_1d_uint8: torch.Tensor,
+    *,
+    device: torch.device,
+    img_height: int,
+    max_width: Optional[int],
+) -> torch.Tensor:
+    """Сырые байты PNG страницы → линия float [-1,1] на GPU (decode_png в lib — CPU, далее только CUDA)."""
+    try:
+        from torchvision.io import ImageReadMode, decode_png
+    except Exception as ex:
+        raise RuntimeError("torchvision.io.decode_png недоступен") from ex
+    b = png_1d_uint8
+    if b.dim() != 1:
+        b = b.flatten()
+    chw = decode_png(b, mode=ImageReadMode.RGB)
+    chw = chw.to(device, non_blocking=True)
+    gray01 = _chw_to_gray01_float(chw)
+    _, hi, wi_src = gray01.shape
+    new_w = max(1, round(float(wi_src) * float(img_height) / float(hi)))
     if max_width is not None:
         new_w = min(new_w, int(max_width))
     y = F.interpolate(gray01.unsqueeze(0), size=(img_height, new_w), mode="bilinear", align_corners=False).squeeze(0)
@@ -181,7 +231,7 @@ def collate_gpu_lines_jpeg_cuda_batch(
     max_width: Optional[int],
     min_crop_width: int,
 ) -> Dict[str, Union[torch.Tensor, List[str], bool, str]]:
-    """JPEG: decode_jpeg(..., device=cuda) списком; PNG/u8: finalize на GPU. Итог на device."""
+    """JPEG: decode_jpeg(..., device=cuda); PNG: decode_png (lib CPU) → CUDA; uint8: finalize на GPU."""
     from htr.data.coco_lines import coco_collate_fn
 
     modes = [str(b.get(LINE_PREP_KEY, LINE_PREP_TENSOR)) for b in batch]
@@ -191,17 +241,25 @@ def collate_gpu_lines_jpeg_cuda_batch(
         return out
 
     if device.type != "cuda":
-        raise RuntimeError("collate_gpu_lines_jpeg_cuda_batch рассчитан на CUDA decode_jpeg")
+        raise RuntimeError("collate_gpu_lines_jpeg_cuda_batch рассчитан на CUDA")
 
     bsz = len(batch)
     texts = [b["text"] for b in batch]  # type: ignore[list-item]
 
     idx_jpeg = [i for i, m in enumerate(modes) if m == LINE_PREP_JPEG_CUDA]
+    idx_png_crop = [i for i, m in enumerate(modes) if m == LINE_PREP_PNG_CROP]
+    idx_png_page = [i for i, m in enumerate(modes) if m == LINE_PREP_PNG_PAGE]
     idx_u8 = [i for i, m in enumerate(modes) if m == LINE_PREP_UINT8]
 
+    allowed = {
+        LINE_PREP_JPEG_CUDA,
+        LINE_PREP_UINT8,
+        LINE_PREP_PNG_CROP,
+        LINE_PREP_PNG_PAGE,
+    }
     for m in modes:
-        if m not in (LINE_PREP_JPEG_CUDA, LINE_PREP_UINT8):
-            raise RuntimeError(f"неожиданный line_prep в jpeg-collate: {m!r}")
+        if m not in allowed:
+            raise RuntimeError(f"неожиданный line_prep в gpu-collate: {m!r}")
 
     row_tensors: List[Optional[torch.Tensor]] = [None] * bsz
 
@@ -223,6 +281,35 @@ def collate_gpu_lines_jpeg_cuda_batch(
                 img_height=img_height,
                 max_width=max_width,
                 min_crop_width=float(min_crop_width),
+            )
+
+    if idx_png_crop:
+        try:
+            from torchvision.io import decode_png
+        except Exception as ex:
+            raise RuntimeError("torchvision.io.decode_png недоступен") from ex
+        for gi in idx_png_crop:
+            jb = batch[gi]["png_bytes"]  # type: ignore[misc]
+            if jb.dim() != 1:
+                jb = jb.flatten()
+            chw = decode_png(jb)
+            chw = chw.to(device, non_blocking=True)
+            row_tensors[gi] = _line_tensor_from_rgb_chw_cuda(
+                chw,
+                batch[gi]["bbox"],  # type: ignore[index]
+                img_height=img_height,
+                max_width=max_width,
+                min_crop_width=float(min_crop_width),
+            )
+
+    if idx_png_page:
+        for gi in idx_png_page:
+            jb = batch[gi]["png_bytes"]  # type: ignore[misc]
+            row_tensors[gi] = _page_png_bytes_to_line_tensor_cuda(
+                jb,
+                device=device,
+                img_height=img_height,
+                max_width=max_width,
             )
 
     if idx_u8:

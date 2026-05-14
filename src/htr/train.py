@@ -538,22 +538,17 @@ def run_training(cfg: dict) -> None:
     )
 
     entries = _training_source_entries(dc)
-    has_page_txt_source = any(str(e.get("kind")) == "page_txt_pairs" for e in entries)
 
-    if bool(tc.get("cuda_jpeg_decode_batched", False)) and nw != 0:
-        print("[htr-train] cuda_jpeg_decode_batched: нужен data.num_workers: 0 — режим decode_jpeg(CUDA) отключён.")
     use_cuda_jpeg = (
         lines_dev.type == "cuda"
-        and nw == 0
-        and bool(tc.get("cuda_jpeg_decode_batched", False))
+        and bool(tc.get("cuda_jpeg_decode_batched", True))
         and train_aug is None
         and use_gpu_line_pipe
-        and not has_page_txt_source
     )
     if use_cuda_jpeg:
         print(
-            "[htr-train] JPEG (batched GPU): torchvision.io.decode_jpeg(..., device=cuda) в главном процессе; "
-            "PNG остаётся CPU-декод → uint8 crop как раньше."
+            "[htr-train] JPEG COCO: батч decode_jpeg(…, device=cuda) в collate; воркеры могут подавать только байты. "
+            "PNG / page_txt_pairs — uint8 на CPU, финализация на GPU. Отключить: training.cuda_jpeg_decode_batched: false."
         )
 
     n_src = len(entries)
@@ -596,6 +591,7 @@ def run_training(cfg: dict) -> None:
                         cache_namespace=str(ent.get("cache_namespace", "") or ""),
                         max_text_chars=ent.get("max_text_chars"),
                         defer_resize_normalize_to_cuda=use_gpu_line_pipe,
+                        defer_png_bytes_to_collate=use_cuda_jpeg,
                     )
                 )
                 kinds.append(k)
@@ -618,6 +614,13 @@ def run_training(cfg: dict) -> None:
         print(f"[htr-train] данные: {len(parts)} активных источников {kinds}; размеры поднаборов={counts} (итого {sum(counts)})")
     else:
         print(f"[htr-train] один источник ({kinds[0]}), размер={counts[0]}")
+
+    if lines_dev.type in ("cuda", "mps") and use_gpu_line_pipe:
+        print(
+            "[htr-train] CPU/GPU: устройство — forward, AMP, float-линия; COCO JPEG — decode_jpeg(CUDA); "
+            "COCO PNG / page_txt PNG — decode_png (ядро libpng CPU) минимизирует работу в воркере, "
+            "серый/resize линии на CUDA; кэш u8 по-прежнему до байтов. Полностью GPU-декод PNG в PyTorch/torchvision без nvJPEG для PNG нет."
+        )
 
     full_ds: torch.utils.data.Dataset = parts[0] if len(parts) == 1 else ConcatDataset(parts)
 
@@ -735,7 +738,7 @@ def run_training(cfg: dict) -> None:
             f"persistent_workers={_persist} dataloader_worker_torch_threads="
             f"{wt_threads if wt_threads > 0 else 'off'}"
         )
-        if device.type == "cuda" and worker_init_fn is not None:
+        if device.type == "cuda" and worker_init_fn is not None and not use_cuda_jpeg:
             hint = (
                 "[htr-train] подсказка: высокий CPU и низкая загрузка GPU при декоде JPEG — норма, "
                 "особенно пока не заполнился preprocessed_cache_dir (первая эпоха дольше, дальше обычно быстрее). "
@@ -757,10 +760,15 @@ def run_training(cfg: dict) -> None:
         f"(torch.cuda.is_available={torch.cuda.is_available()})"
     )
     if use_gpu_line_pipe:
-        print(
-            "[htr-train] линии (GPU prep): билинейный ресайз + нормализация [-1,1] на устройстве; "
-            "декод файла страницы и вырезка bbox выполняются на CPU в воркерах DataLoader."
-        )
+        if use_cuda_jpeg:
+            print(
+                "[htr-train] линии: промах u8-кэша — JPEG decode_jpeg(CUDA); PNG — decode_png→CUDA, ресайз/нормализация на GPU."
+            )
+        else:
+            print(
+                "[htr-train] линии: float-линия на GPU после кропа; "
+                "JPEG decode на GPU выключен (training.cuda_jpeg_decode_batched: false)."
+            )
     if device_pref == "cuda" and not torch.cuda.is_available():
         _extra = ""
         if _google_colab_runtime():
