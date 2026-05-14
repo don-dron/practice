@@ -686,7 +686,6 @@ def run_training(cfg: dict) -> None:
             "(до 8 workers, prefetch до 8, persistent_workers; возможен повтор 1455 — тогда выключите или num_workers 0)."
         )
 
-    _pin_memory = torch.cuda.is_available()
     if use_cuda_jpeg:
         _collate = functools.partial(
             collate_gpu_lines_jpeg_cuda_batch,
@@ -699,6 +698,9 @@ def run_training(cfg: dict) -> None:
         _collate = coco_collate_mixed_lines
     else:
         _collate = coco_collate_fn
+
+    # collate_gpu_lines_jpeg_cuda_batch кладёт image на CUDA — pin_memory недопустим (dense CPU only).
+    _pin_memory = bool(torch.cuda.is_available() and not use_cuda_jpeg)
     _dl_common: dict = {
         "num_workers": nw,
         "collate_fn": _collate,
@@ -746,7 +748,7 @@ def run_training(cfg: dict) -> None:
             _persist = (sys.platform != "win32") or win_fast
         print(
             f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
-            f"persistent_workers={_persist} dataloader_worker_torch_threads="
+            f"persistent_workers={_persist} pin_memory={_pin_memory} dataloader_worker_torch_threads="
             f"{wt_threads if wt_threads > 0 else 'off'}"
         )
         if device.type == "cuda" and worker_init_fn is not None and not use_cuda_jpeg:
