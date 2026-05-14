@@ -79,8 +79,9 @@ training:
   checkpoint_dir: "training/checkpoints"
   experiment_name: "multi_yenisei_dp_roo"
   save_every_epochs: 1
-  # false: не перезаписывать уже существующие .pt при сохранении. Также по умолчанию включает resume: загрузка
-  # weights из checkpoint_dir/latest.pt (или training.resume_checkpoint) перед эпохами — иначе каждый запуск «с нуля».
+  # false + resume: загрузить веса и продолжить с эпохи completed_epoch+1 (в .pt сохраняется completed_epoch).
+  # Уже сохранённые эпохи не считаются заново (цикл только range(start_epoch, epochs+1)). Запись .pt всё так же может
+  # блокироваться, если файл есть и checkpoint_overwrite остаётся false.
   checkpoint_overwrite: false
   # Явно: true/false. Если не указано — true когда checkpoint_overwrite: false, иначе false.
   # resume_if_checkpoint_exists: true

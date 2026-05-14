@@ -10,8 +10,12 @@ def save_checkpoint(
     itos: list[str],
     model_name: str,
     yaml_dump: dict,
+    completed_epoch: int | None = None,
 ) -> None:
-    torch.save({"state_dict": state_dict, "itos": itos, "model_name": model_name, "config_yaml": yaml_dump}, path)
+    blob: dict = {"state_dict": state_dict, "itos": itos, "model_name": model_name, "config_yaml": yaml_dump}
+    if completed_epoch is not None:
+        blob["completed_epoch"] = int(completed_epoch)
+    torch.save(blob, path)
 
 
 def load_checkpoint(path: str) -> dict:

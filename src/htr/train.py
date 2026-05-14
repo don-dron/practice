@@ -4,6 +4,7 @@ from pathlib import Path
 import functools
 import hashlib
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
@@ -133,9 +134,41 @@ def _effective_resume_if_checkpoint_exists(tc: dict) -> bool:
     return not bool(tc.get("checkpoint_overwrite", False))
 
 
-def _try_load_training_checkpoint(model: nn.Module, tc: dict, ckpt_dir: Path) -> None:
+def _max_named_epoch_ckpt_on_disk(ckpt_dir: Path, experiment: str) -> int:
+    """Максимальный N среди файлов {experiment}_eN.pt (для старых сохранений без completed_epoch внутри)."""
+    pattern = re.compile(rf"{re.escape(experiment)}_e(\d+)\.pt$")
+    best = 0
+    try:
+        for path in ckpt_dir.iterdir():
+            m = pattern.match(path.name)
+            if m is not None:
+                best = max(best, int(m.group(1)))
+    except FileNotFoundError:
+        pass
+    return best
+
+
+def _infer_completed_epoch_from_resume(payload: dict, ckpt_src: Path, ckpt_dir: Path, experiment: str) -> int:
+    ce = payload.get("completed_epoch")
+    if isinstance(ce, int) and ce >= 1:
+        return ce
+    stem_m = re.match(rf"{re.escape(experiment)}_e(\d+)$", ckpt_src.stem)
+    if stem_m is not None:
+        return int(stem_m.group(1))
+    return _max_named_epoch_ckpt_on_disk(ckpt_dir, experiment)
+
+
+def _resume_load_and_start_epoch(
+    model: nn.Module,
+    tc: dict,
+    ckpt_dir: Path,
+    *,
+    experiment: str,
+    total_epochs: int,
+) -> int:
+    """Загружает веса при включённом resume; возвращает номер первой эпохи цикла (1-based)."""
     if not _effective_resume_if_checkpoint_exists(tc):
-        return
+        return 1
 
     resume_raw = tc.get("resume_checkpoint")
     candidates: List[Path] = []
@@ -143,9 +176,12 @@ def _try_load_training_checkpoint(model: nn.Module, tc: dict, ckpt_dir: Path) ->
         p = Path(resume_raw.strip()).expanduser()
         candidates.append(p.resolve() if p.is_absolute() else (Path.cwd() / p).resolve())
     candidates.append((ckpt_dir / "latest.pt").resolve())
+    emax = _max_named_epoch_ckpt_on_disk(ckpt_dir, experiment)
+    if emax > 0:
+        candidates.append((ckpt_dir / f"{experiment}_e{emax}.pt").resolve())
 
-    src: Optional[Path] = None
     payload: dict = {}
+    src: Optional[Path] = None
     for cand in candidates:
         if cand.is_file():
             payload = load_checkpoint(str(cand))
@@ -153,37 +189,58 @@ def _try_load_training_checkpoint(model: nn.Module, tc: dict, ckpt_dir: Path) ->
             break
 
     if src is None:
-        print(
-            "[htr-train] resume: нет файла (resume_checkpoint / checkpoint_dir/latest.pt) — "
-            "обучение с нуля по весам модели."
-        )
-        return
+        print("[htr-train] resume: чекпоинт не найден — первый запуск с эпохи 1.")
+        return 1
 
     sd = payload.get("state_dict")
     if not isinstance(sd, dict):
-        print(f"[htr-train] resume: в {src} нет state_dict — пропуск.")
-        return
+        print(f"[htr-train] resume: в {src} нет state_dict — старт с эпохи 1.")
+        return 1
 
     incomp = model.load_state_dict(sd, strict=False)
     if incomp.missing_keys:
-        nk = len(incomp.missing_keys)
-        sample = incomp.missing_keys[:3]
-        print(f"[htr-train] resume: missing_keys ({nk}), пример: {sample}")
+        print(f"[htr-train] resume: missing_keys ({len(incomp.missing_keys)}), пример: {incomp.missing_keys[:3]}")
     if incomp.unexpected_keys:
-        uk = len(incomp.unexpected_keys)
-        sample = incomp.unexpected_keys[:3]
-        print(f"[htr-train] resume: unexpected_keys ({uk}), пример: {sample}")
+        print(f"[htr-train] resume: unexpected_keys ({len(incomp.unexpected_keys)}), пример: {incomp.unexpected_keys[:3]}")
 
+    completed = _infer_completed_epoch_from_resume(payload, src, ckpt_dir, experiment)
+    start_epoch = completed + 1
     print(
-        f"[htr-train] resume: загружены веса из {src} "
-        "(AdamW/скалер с нуля; полный resume оптимизатора в checkpoint пока не сохраняется)."
+        f"[htr-train] resume: веса из {src}; completed_epoch≈{completed} → цикл со эпохи {start_epoch} по "
+        f"{total_epochs} (уже сохранённые эпохи не повторяются)."
     )
+
+    if (
+        not isinstance(payload.get("completed_epoch"), int)
+        and completed == 0
+        and src.name == "latest.pt"
+        and _max_named_epoch_ckpt_on_disk(ckpt_dir, experiment) == 0
+    ):
+        print(
+            f"[htr-train] warning: в {src.name} нет поля completed_epoch и в {ckpt_dir} нет "
+            f"файлов вида {experiment}_eN.pt — сколько эпох уже выполнено, неизвестно; "
+            "цикл обучения начнётся с эпохи 1 (веса из latest уже подставлены). "
+            "Дальнейшие сохранения будут содержать completed_epoch, либо укажите training.resume_checkpoint: "
+            f'"{experiment}_e<N>.pt"'
+        )
+
+    elif not isinstance(payload.get("completed_epoch"), int) and completed > 0:
+        print(
+            "[htr-train] подсказка: в этом .pt нет completed_epoch — оценка числа завершённых эпох по имени файла / "
+            "каталогу. Новые сохранения включают completed_epoch автоматически."
+        )
+
+    if start_epoch > total_epochs:
+        print(
+            "[htr-train] все эпохи из конфига уже считаются пройденными; тренировочный цикл пустой."
+        )
+
     if not bool(tc.get("checkpoint_overwrite", False)):
         print(
-            "[htr-train] Внимание: checkpoint_overwrite=false — после эпох записи .pt будут пропущены, если файлы уже "
-            "есть; улучшения останутся только в памяти до перезапуска. Поставьте checkpoint_overwrite: true, чтобы "
-            "сохранить новый результат."
+            "[htr-train] При checkpoint_overwrite=false новые сохранения того же пути блокируются, если файл есть."
         )
+
+    return start_epoch
 
 
 def _pack_targets(texts_batch: list[str], charset: Charset, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -893,10 +950,16 @@ def run_training(cfg: dict) -> None:
             "Install GPU build: https://pytorch.org/get-started/locally/"
             + _extra
         )
+    epochs = int(cfg["training"]["epochs"])
+    experiment = str(cfg["training"].get("experiment_name", "run"))
+
     model = resolve_model(cfg, charset.num_classes).to(device)
     ckpt_dir = Path(str(cfg["training"].get("checkpoint_dir", "training/checkpoints"))).expanduser().resolve()
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    _try_load_training_checkpoint(model, tc, ckpt_dir)
+    start_epoch = _resume_load_and_start_epoch(model, tc, ckpt_dir, experiment=experiment, total_epochs=epochs)
+    if start_epoch > epochs:
+        return
+
     model = _maybe_torch_compile(model, tc, device)
 
     freeze_ep = _freeze_backbone_epochs(cfg)
@@ -912,10 +975,7 @@ def run_training(cfg: dict) -> None:
     amp_cfg = bool(cfg["training"].get("amp", False))
     scaler = _make_grad_scaler(enabled=(amp_cfg and device.type == "cuda"))
 
-    epochs = int(cfg["training"]["epochs"])
-    experiment = cfg["training"].get("experiment_name", "run")
-
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         if freeze_ep > 0 and isinstance(model, PretrainedResnetLineCTC):
             _set_pretrained_backbone_frozen(model, epoch <= freeze_ep)
 
@@ -1042,6 +1102,7 @@ def run_training(cfg: dict) -> None:
                     itos=charset.itos,
                     model_name=str(cfg["model"]["name"]),
                     yaml_dump=dict(cfg),
+                    completed_epoch=epoch,
                 )
 
     latest_ck = ckpt_dir / "latest.pt"
@@ -1052,4 +1113,5 @@ def run_training(cfg: dict) -> None:
             itos=charset.itos,
             model_name=str(cfg["model"]["name"]),
             yaml_dump=dict(cfg),
+            completed_epoch=epochs,
         )
