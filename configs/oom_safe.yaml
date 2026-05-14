@@ -1,0 +1,9 @@
+# Если даже default (batch 256, workers 4) падает по VRAM — второй оверлей:
+#   htr-train --config configs/default.yaml --config configs/oom_safe.yaml
+
+training:
+  batch_size: 128
+  lr: 0.01
+
+data:
+  num_workers: 0

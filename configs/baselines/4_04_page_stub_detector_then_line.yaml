@@ -46,6 +46,6 @@ training:
   objective: ctc
   batch_size: 864
   epochs: 20
-  lr: 0.001
+  lr: 0.01
   experiment_name: "two_stage_line_placeholder_section44"
   checkpoint_dir: "training/checkpoints"

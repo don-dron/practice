@@ -772,16 +772,31 @@ def run_training(cfg: dict) -> None:
         f"[htr-train] device: requested={device_pref!r} -> {device!r} "
         f"(torch.cuda.is_available={torch.cuda.is_available()})"
     )
+    if device.type == "cuda" and torch.cuda.is_available():
+        free_b, total_b = torch.cuda.mem_get_info()
+        free_g, total_g = free_b / (1024**3), total_b / (1024**3)
+        print(
+            f"[htr-train] CUDA VRAM сейчас: свободно ~{free_g:.2f} / {total_g:.2f} GiB "
+            f"({torch.cuda.current_device()=} {torch.cuda.get_device_name(0)!r})"
+        )
+        if free_g < 0.5:
+            print(
+                "[htr-train] WARNING: на старте почти нет свободной VRAM — либо уже занято другими процессами, "
+                "либо это снимок не в момент пика (после OOM/crash процесс уходит и nvidia-smi снова «пустой»). "
+                "Один htr-train с data.num_workers>0 — это уже родитель + воркеры (несколько PID), суммарно видно в OOM."
+            )
     if use_gpu_line_pipe:
         if use_cuda_jpeg:
             print(
                 "[htr-train] линии: промах u8-кэша — JPEG decode_jpeg(CUDA); PNG — decode_png→CUDA, ресайз/нормализация на GPU."
             )
             print(
-                "[htr-train] VRAM: collate в воркерах использует CUDA — память делит несколько процессов с обучением. "
-                "При OutOfMemory: уменьшите training.batch_size, data.num_workers, async_prefetch_queue_size; "
-                "не запускайте второй эксперимент на той же GPU; при фрагментации: "
-                "PYTORCH_ALLOC_CONF=expandable_segments:True"
+                "[htr-train] VRAM: collate с decode на CUDA — у главного процесса и у каждого воркера DataLoader "
+                "свой PID и свой кусок GPU-памяти; в стеке OOM перечислены все они, обычно это один ваш запуск, "
+                "не чужие job'ы. Плюс ко всему могут быть второй эксперимент/ноутбук на той же карте. "
+                "При OutOfMemory: сначала уменьшите data.num_workers и/или training.batch_size, "
+                "async_prefetch_queue_size; при необходимости training.cuda_jpeg_decode_batched: false; "
+                "при фрагментации: PYTORCH_ALLOC_CONF=expandable_segments:True"
             )
         else:
             print(

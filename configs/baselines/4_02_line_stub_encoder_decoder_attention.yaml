@@ -37,6 +37,6 @@ training:
   decoder_max_steps: 512
   batch_size: 1008
   epochs: 20
-  lr: 0.001
+  lr: 0.01
   experiment_name: "line_attention_section42"
   checkpoint_dir: "training/checkpoints"

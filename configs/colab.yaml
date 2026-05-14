@@ -1,4 +1,4 @@
-# Google Colab: ещё меньший батч при узкой VRAM. Иначе достаточно configs/default.yaml (batch 512).
+# Google Colab: ещё жёстче, чем default (batch 256). Иначе достаточно только configs/default.yaml.
 #
 #   htr-train --config configs/default.yaml --config configs/colab.yaml
 #
@@ -6,8 +6,8 @@
 # Воркеры: export HTR_COLAB_NUM_WORKERS=6 (или 8), если хватает RAM.
 
 training:
-  batch_size: 384
-  lr: 0.000111
+  batch_size: 128
+  lr: 0.01
   hardware_utilization: normal
   main_torch_threads: 2
 
