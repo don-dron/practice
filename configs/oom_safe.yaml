@@ -1,22 +1,32 @@
-# Экстремально мало VRAM / всё ещё CUDA OOM после default (batch 1 + accum 8).
-#   htr-train --config configs/default.yaml --config configs/oom_safe.yaml
-# В начале обучения смотрите строку `[htr-train] line_pipeline:` — там видно,
-# финализация ли uint8/NVJPEG реально на GPU (если нет — cpu_line_finalize не влияет).
+# Экстремально мало VRAM / упорный CUDA OOM после default.yaml.
+#
+#   htr-train -c configs/default.yaml -c configs/oom_safe.yaml
+#
+# - cudnn_enabled: false убирает пик временной памяти под алгоритмы cuDNN (медленнее conv).
+# - Меньший LSTM и max_width режут активности и параметры (+ состояние AdamW).
+# - cuda_empty_cache_* — последний рычаг (очень медленно).
+# После первой эпохи см. строку «пик CUDA» — её можно сравнить с суммой в сообщении об OOM.
 
 training:
   batch_size: 1
   lr: 0.05
   gradient_accumulation_steps: 16
+  hardware_utilization: normal
+  main_torch_threads: 2
+  cudnn_enabled: false
   cudnn_benchmark: false
-  amp: false                          # смягчает память cudnn под mixed precision при узкой VRAM
-  cpu_line_finalize: true             # uint8-батчи: resize/нормализация на CPU, затем один copy на CUDA
+  amp: false
+  cuda_empty_cache_after_backward: true
+  cuda_empty_cache_after_optimizer_step: true
+  cpu_line_finalize: true             # имеет эффект при uint8/nvJPEG; с default coco_collate — без изменений пайплайна
   cuda_line_resize_on_device: false
   cuda_jpeg_decode_batched: false
-  # Тормозит эпоху; включено как «крайний рычаг» против фрагментации allocator. Если слишком медленно — false.
-  cuda_empty_cache_after_optimizer_step: true
   val_max_batches: 8
 
+model:
+  lstm_hidden: 128                    # уже чекпоинт «другая сеть», чем у default lstm_hidden 256
+
 data:
-  max_width: 256
+  max_width: 192
   num_workers: 0
   preprocessed_ram_cache_max_gb: 0

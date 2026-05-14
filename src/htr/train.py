@@ -45,6 +45,12 @@ def _maybe_cuda_empty_cache_after_step(tc: dict, device: torch.device) -> None:
     torch.cuda.empty_cache()
 
 
+def _maybe_cuda_empty_cache_after_backward(tc: dict, device: torch.device) -> None:
+    if device.type != "cuda" or not bool(tc.get("cuda_empty_cache_after_backward", False)):
+        return
+    torch.cuda.empty_cache()
+
+
 def _text_at_index_for_charset(ds: Dataset, idx: int) -> str:
     """Текст по индексу без декодирования изображений (иначе COCO на сотнях тысяч строк «висит» на старте)."""
     if isinstance(ds, Subset):
@@ -995,7 +1001,13 @@ def run_training(cfg: dict) -> None:
             print(hint)
 
     if device.type == "cuda":
-        if tc.get("cudnn_benchmark", False):
+        if not tc.get("cudnn_enabled", True):
+            torch.backends.cudnn.enabled = False
+            print(
+                "[htr-train] training.cudnn_enabled: false → torch.backends.cudnn.enabled=False "
+                "(меньше пикового workspace cudnn при свёртках; возможны медленные conv)."
+            )
+        if torch.backends.cudnn.enabled and tc.get("cudnn_benchmark", False):
             torch.backends.cudnn.benchmark = True
         if tc.get("allow_tf32", True):
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -1101,6 +1113,15 @@ def run_training(cfg: dict) -> None:
             "(медленнее, освобождает CUDA allocator между optimizer.step)."
         )
 
+    if bool(tc.get("cuda_empty_cache_after_backward", False)) and device.type == "cuda":
+        print(
+            "[htr-train] cuda_empty_cache_after_backward включён "
+            "(после каждого backward; ещё дороже по времени при накоплении градиентов)."
+        )
+
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+
     for epoch in range(start_epoch, epochs + 1):
         if freeze_ep > 0 and isinstance(model, PretrainedResnetLineCTC):
             _set_pretrained_backbone_frozen(model, epoch <= freeze_ep)
@@ -1135,6 +1156,7 @@ def run_training(cfg: dict) -> None:
                     with _autocast_cuda():
                         loss = _attention_ce_loss_microbatched(model, images, tin_y, targ_y, m_ok, tc)
                     scaler.scale(loss).backward()
+                    _maybe_cuda_empty_cache_after_backward(tc, device)
                     clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
                     if clip_val > 0:
                         scaler.unscale_(optim_)
@@ -1145,6 +1167,7 @@ def run_training(cfg: dict) -> None:
                 else:
                     loss = _attention_ce_loss_microbatched(model, images, tin_y, targ_y, m_ok, tc)
                     loss.backward()
+                    _maybe_cuda_empty_cache_after_backward(tc, device)
                     clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
                     if clip_val > 0:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
@@ -1167,6 +1190,7 @@ def run_training(cfg: dict) -> None:
                             )
                             batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
                         scaler.scale(batch_loss).backward()
+                        _maybe_cuda_empty_cache_after_backward(tc, device)
                         if clip_val > 0:
                             scaler.unscale_(optim_)
                             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
@@ -1180,6 +1204,7 @@ def run_training(cfg: dict) -> None:
                         )
                         batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
                         batch_loss.backward()
+                        _maybe_cuda_empty_cache_after_backward(tc, device)
                         if clip_val > 0:
                             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
                         optim_.step()
@@ -1194,6 +1219,7 @@ def run_training(cfg: dict) -> None:
                             )
                             batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
                         scaler.scale(batch_loss / float(acc)).backward()
+                        _maybe_cuda_empty_cache_after_backward(tc, device)
                     else:
                         log_probs = model(images)
                         inp_len = torch.full(
@@ -1201,6 +1227,7 @@ def run_training(cfg: dict) -> None:
                         )
                         batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
                         (batch_loss / float(acc)).backward()
+                        _maybe_cuda_empty_cache_after_backward(tc, device)
                     loss = batch_loss
                     ctc_accum_count += 1
                     if ctc_accum_count >= acc:
@@ -1285,6 +1312,13 @@ def run_training(cfg: dict) -> None:
                     else ""
                 )
                 print(f"[epoch {epoch}] train_loss={mean_train:.4f} val_sym_error_ratio={avg_cer:.4f}{val_note}")
+
+        if device.type == "cuda" and epoch == start_epoch:
+            pa = torch.cuda.max_memory_allocated() / (1024**3)
+            pr = torch.cuda.max_memory_reserved() / (1024**3)
+            print(
+                f"[htr-train] пик CUDA после эпохи {epoch}: allocated≈{pa:.3f} GiB, reserved≈{pr:.3f} GiB"
+            )
 
         save_every = max(1, int(cfg["training"].get("save_every_epochs", 1)))
         if epoch % save_every == 0:

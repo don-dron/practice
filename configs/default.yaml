@@ -1,5 +1,5 @@
 # Базовый конфиг: короткий прогон + укороченный train (train_subsample_divisor). По умолчанию — ориентир на ~8 ГБ VRAM (малый batch, CPU JPEG, без воркеров).
-# Если OOM сохраняется: htr-train -c configs/default.yaml -c configs/oom_safe.yaml, либо увеличьте gradient_accumulation_steps (CTC); закройте другие GPU-процессы.
+# Если OOM сохраняется: обязательно второй конфиг `configs/oom_safe.yaml`; там cudnn выключается и кеш чистится после backward/step.
 # Если «всё равно медленно»:
 #   1) Первая эпоха долгая, пока строится preprocessed_cache_dir — вторая обычно быстрее (или очистите кэш только когда нужно).
 #   2) PNG в датасете = тяжёлый CPU-декод. Быстрый JPEG на GPU: training.cuda_jpeg_decode_batched: true при запасе VRAM и осторожном num_workers.
@@ -94,9 +94,13 @@ training:
   async_prefetch_queue_size: 1
   # Параллельное чтение только текстов для алфавита (индексы образов не трогаются); для >4096 строк и max/флага
   parallel_charset_text_reads: true
+  # true — cuDNN для свёрток (быстрый режим по умолчанию). При упорном OOM: training.cudnn_enabled: false или oom_safe.yaml.
+  cudnn_enabled: true
   # false на узкой VRAM: меньше вспомогательной памяти под подбор cudnn-алгоритмов свёрток; сервер без лимита — cudnn_benchmark: true или configs/gpu_large.yaml.
   cudnn_benchmark: false
   allow_tf32: true
+  # true — после каждого backward (очень дорого при gradient_accumulation); иногда смягчает фрагментацию между микробатчами.
+  cuda_empty_cache_after_backward: false
   # true — после каждого optimizer/step (тяжело по времени): освобождение кеша CUDA против фрагментации allocator при упорном OOM.
   cuda_empty_cache_after_optimizer_step: false
   # null — при hardware_utilization: max подставится авто в train.py; иначе можно задать явно (напр. 2 для CUDA).
