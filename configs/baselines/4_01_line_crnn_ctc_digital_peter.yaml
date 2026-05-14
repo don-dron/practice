@@ -27,7 +27,7 @@ model:
   lstm_hidden: 256
 
 training:
-  batch_size: 96
+  batch_size: 144
   epochs: 5
   lr: 0.001
   experiment_name: "dpeter_crnn_ctc"

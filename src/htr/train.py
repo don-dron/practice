@@ -175,6 +175,41 @@ def _attention_hypothesis(ce_tokens: list[int], charset: Charset) -> str:
     return "".join(out)
 
 
+class _DataloaderWorkerTorchThreadsInit:
+    """Ограничивает BLAS/OpenMP/torch внутри воркера DataLoader.
+
+    Без этого num_workers процессов × десятки потоков OpenMP дают «шумный» CPU и пустую GPU.
+    """
+
+    __slots__ = ("t",)
+
+    def __init__(self, torch_threads: int) -> None:
+        self.t = max(1, int(torch_threads))
+
+    def __call__(self, worker_id: int) -> None:
+        del worker_id
+        ts = str(self.t)
+        os.environ["OMP_NUM_THREADS"] = ts
+        os.environ["MKL_NUM_THREADS"] = ts
+        os.environ["OPENBLAS_NUM_THREADS"] = ts
+        os.environ["NUMEXPR_NUM_THREADS"] = ts
+        os.environ["VECLIB_MAXIMUM_THREADS"] = ts
+        try:
+            torch.set_num_threads(int(self.t))
+        except Exception:
+            pass
+
+
+def _parse_dataloader_worker_torch_threads(dc: dict) -> int:
+    raw = dc.get("dataloader_worker_torch_threads", 1)
+    if raw is None:
+        return 1
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _dataload_worker_count(dc: dict) -> int:
     nw_requested = int(dc.get("num_workers", 0))
     nw = max(0, nw_requested)
@@ -419,12 +454,17 @@ def run_training(cfg: dict) -> None:
 
     bs = int(cfg["training"]["batch_size"])
 
+    wt_threads = _parse_dataloader_worker_torch_threads(dc)
+    worker_init_fn = _DataloaderWorkerTorchThreadsInit(wt_threads) if nw > 0 and wt_threads > 0 else None
+
     _pin_memory = torch.cuda.is_available()
     _dl_common: dict = {
         "num_workers": nw,
         "collate_fn": coco_collate_fn,
         "pin_memory": _pin_memory,
     }
+    if worker_init_fn is not None:
+        _dl_common["worker_init_fn"] = worker_init_fn
     if nw > 0:
         _dl_common["persistent_workers"] = True
         try:
@@ -440,15 +480,22 @@ def run_training(cfg: dict) -> None:
         batch_size=max(1, bs // 2),
         **_dl_common,
     )
-    if nw > 0:
-        print(
-            f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
-            "persistent_workers=true"
-        )
 
     device_pref = cfg["project"].get("device", "cuda")
     resolved = pick_device(device_pref)
     device = torch.device(resolved)
+
+    if nw > 0:
+        print(
+            f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
+            f"persistent_workers=true dataloader_worker_torch_threads="
+            f"{wt_threads if wt_threads > 0 else 'off'}"
+        )
+        if device.type == "cuda" and worker_init_fn is not None:
+            print(
+                "[htr-train] подсказка: высокий CPU и низкая загрузка GPU при декоде JPEG — норма; "
+                "усилить GPU: batch_size↑, preprocessed_cache_dir (SSD), num_workers ≈ числу ядер без гиперпростоя."
+            )
 
     tc = cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
     if device.type == "cuda":

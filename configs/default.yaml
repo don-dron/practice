@@ -34,12 +34,15 @@ data:
   min_crop_width: 4
   val_fraction: 0.05                   # простой случайный hold-out если отдельного val-json нет
   num_workers: 12
+  # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU, GPU ждёт батч).
+  # 0 — не трогать (старое поведение).
+  dataloader_worker_torch_threads: 1
 
   augmentation_train: false
   prefetch_factor: 8
   # После первого прохода датасета — строки как .pt по хэшу (имя файла,bbox,height,max_width,min_width).
   # Снимает декод JPEG на последующих эпохах; не совместимо с augmentation_train: true. Очистка: удалите каталог.
-  preprocessed_cache_dir: null
+  preprocessed_cache_dir: "training/preprocessed_cache"
   # LRU строк в RAM, сумма ~GiB между пулами workers train+val; при num_workers=0 всё на главном процессе.
   # 0 — только диск-кэш (если указан preprocessed_cache_dir) или без кэша.
   preprocessed_ram_cache_max_gb: 6
@@ -54,7 +57,7 @@ model:
   dropout: 0.0
 
 training:
-  batch_size: 96
+  batch_size: 144
   epochs: 5
   lr: 0.0005
   weight_decay: 0.0

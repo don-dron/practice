@@ -223,3 +223,4 @@ data/yenisei_gov_reports_td
 data/russian_old_orthography_ocr
 
 archive.tar.gz
+training/preprocessed_cache
