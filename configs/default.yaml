@@ -33,13 +33,15 @@ data:
   max_width: 1200                       # ограничение по ширине после масштабирования высоты
   min_crop_width: 4
   val_fraction: 0.05                   # простой случайный hold-out если отдельного val-json нет
+  # Скорость vs CPU: меньше воркеров → меньше загрузка CPU, но часто дольше эпоха (GPU ждёт). Реально уменьшить работу
+  # CPU на тот же темп — дать заполниться preprocessed_cache_dir (после 1-го прохода декода меньше).
   num_workers: 12
   # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU, GPU ждёт батч).
   # 0 — не трогать (старое поведение).
   dataloader_worker_torch_threads: 1
 
   augmentation_train: false
-  prefetch_factor: 12
+  prefetch_factor: 8
   # После первого прохода датасета — строки как .pt по хэшу (имя файла,bbox,height,max_width,min_width).
   # Снимает декод JPEG на последующих эпохах; не совместимо с augmentation_train: true. Очистка: удалите каталог.
   preprocessed_cache_dir: "training/preprocessed_cache"
@@ -68,8 +70,8 @@ training:
   amp: true
   cudnn_benchmark: true
   allow_tf32: true
-  # Меньше потоков BLAS в главном процессе — иногда быстрее подаётся батч при CUDA и num_workers>0. null = не менять.
-  main_torch_threads: null
+  # Для CUDA обычно 2 — меньше конкуренции с воркерами; чисто CPU-тренировка — поставьте null.
+  main_torch_threads: 2
   # Усечь val до N батчей (сильно ускоряет эпоху; val-метрика по подвыборке). null = прогонять весь val.
   val_max_batches: 120
   # Только PyTorch 2+ и CUDA: компиляция графа (первый проход медленнее; бывает несовместима с частью моделей).

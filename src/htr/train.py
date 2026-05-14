@@ -119,6 +119,71 @@ def _maybe_torch_compile(model: nn.Module, tc: dict, device: torch.device) -> nn
             return model
 
 
+def _du_sh_quick(cache_root: Path) -> Optional[str]:
+    """Размер каталога через du -sh без обхода каждого файла в Python."""
+    import shutil
+    import subprocess
+
+    du_bin = shutil.which("du")
+    if not du_bin:
+        return None
+    try:
+        proc = subprocess.run(
+            [du_bin, "-sh", str(cache_root)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout.split()[0].strip()
+    except Exception:
+        pass
+    return None
+
+
+def _log_disk_cache_readiness(parts: list, kinds: list[str], counts: list[int]) -> None:
+    """Подсказки по заполнению preprocessed_cache: быстрый du + опционально полный счётчик .pt."""
+    idxs = [i for i, p in enumerate(parts) if getattr(p, "preprocessed_cache_root", None) is not None]
+    if not idxs:
+        return
+
+    for i in idxs:
+        p = parts[i]
+        root = Path(p.preprocessed_cache_root)  # type: ignore[arg-type,misc]
+        if not root.is_dir():
+            print(f"[htr-train] кэш: каталог ещё не создан или пуст — {root}")
+            continue
+        human = _du_sh_quick(root)
+        h = human if human is not None else "(нет команды du — смотрите размер папки вручную)"
+        print(f"[htr-train] кэш на диске ({kinds[i]}): ~{h}\t{root}")
+        print(f"[htr-train]   цель: ~{counts[i]} файлов .pt (один на пример); пока кэш не полный, CPU будет высоким при декоде.")
+    print(
+        "[htr-train] «Прогрев» диска: после полного прохода по train размер подкаталога почти не растёт, число .pt → ожидаемому. "
+        "Точный подсчёт (долго): HTR_DISK_CACHE_STATS=1 … или ./scripts/disk_cache_stats.sh"
+    )
+
+    ev = os.environ.get("HTR_DISK_CACHE_STATS", "").strip().lower()
+    if ev not in ("1", "true", "yes"):
+        return
+
+    import time
+
+    for i in idxs:
+        p = parts[i]
+        root = Path(p.preprocessed_cache_root)  # type: ignore[arg-type,misc]
+        if not root.is_dir():
+            continue
+        exp = counts[i]
+        t0 = time.perf_counter()
+        n_pt = sum(1 for _ in root.rglob("*.pt"))
+        dt = time.perf_counter() - t0
+        pct = 100.0 * n_pt / max(1, exp)
+        print(
+            f"[htr-train] HTR_DISK_CACHE_STATS: {kinds[i]} — {n_pt}/{exp} .pt (~{pct:.1f}%) за {dt:.1f}s"
+        )
+
+
 def _training_objective(cfg: dict) -> str:
     return str(cfg.get("training", {}).get("objective", "ctc")).strip().lower()
 
@@ -459,13 +524,7 @@ def run_training(cfg: dict) -> None:
 
     full_ds: torch.utils.data.Dataset = parts[0] if len(parts) == 1 else ConcatDataset(parts)
 
-    _printed_cache: set[str] = set()
-    for p in parts:
-        if p.preprocessed_cache_root is not None:
-            rp = str(p.preprocessed_cache_root)
-            if rp not in _printed_cache:
-                _printed_cache.add(rp)
-                print(f"[htr-train] preprocessed_cache_dir={rp}")
+    _log_disk_cache_readiness(parts, kinds, counts)
     if ram_budget_b > 0:
         split_d = max(1, nw) * (2 if nw > 0 else 1)
         print(
