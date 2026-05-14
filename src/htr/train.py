@@ -4,6 +4,7 @@ from pathlib import Path
 import functools
 import hashlib
 import os
+import random
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -843,6 +844,24 @@ def run_training(cfg: dict) -> None:
 
     vf = float(dc.get("val_fraction", 0.0))
     train_ix, val_ix = random_split_indices(len(full_ds), vf, seed=seed)
+
+    raw_div = dc.get("train_subsample_divisor")
+    if raw_div is not None:
+        try:
+            div = int(raw_div)
+        except (TypeError, ValueError):
+            div = 1
+        if div > 1 and len(train_ix) > 0:
+            k = max(1, len(train_ix) // div)
+            if k < len(train_ix):
+                rng = random.Random(seed + 9_137_331)
+                perm = list(train_ix)
+                rng.shuffle(perm)
+                train_ix = perm[:k]
+                print(
+                    f"[htr-train] train_subsample_divisor={div}: берём {len(train_ix)} строк из исходных "
+                    f"{len(perm)} train split (~{100.0 * len(train_ix) / len(perm):.2f}%)"
+                )
 
     if len(train_ix) > 50_000:
         print(
