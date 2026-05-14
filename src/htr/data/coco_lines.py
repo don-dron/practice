@@ -97,7 +97,60 @@ def _load_lines_tensor_cache(path: Path) -> Optional[Tuple[str, torch.Tensor, Un
     return None
 
 
+def disk_lines_try_u8_cache(
+    cache_root: Optional[Path], key_hex: str
+) -> Optional[Tuple[torch.Tensor, int, int]]:
+    """Есть готовый u8-.pt на диске — вернуть (tensor, crop_h, crop_w); иначе None (пересчёт не нужен)."""
+    if cache_root is None or not key_hex:
+        return None
+    cpath = _lines_tensor_cache_path(cache_root, key_hex)
+    if not cpath.is_file():
+        return None
+    disk_hit = _load_lines_tensor_cache(cpath)
+    if disk_hit is None:
+        return None
+    mode, payload, aux = disk_hit
+    if mode != "u8":
+        return None
+    tup = aux if isinstance(aux, tuple) else (0, 0)
+    ch_, cw_ = int(tup[0]), int(tup[1])
+    if not isinstance(payload, torch.Tensor):
+        return None
+    if int(payload.shape[-2]) != ch_ or int(payload.shape[-1]) != cw_:
+        return None
+    return payload, ch_, cw_
+
+
+def disk_lines_try_float_cache(
+    cache_root: Optional[Path], key_hex: str
+) -> Optional[Tuple[torch.Tensor, int]]:
+    """Есть готовый float-.pt на диске — (tensor, width); иначе None."""
+    if cache_root is None or not key_hex:
+        return None
+    cpath = _lines_tensor_cache_path(cache_root, key_hex)
+    if not cpath.is_file():
+        return None
+    disk_hit = _load_lines_tensor_cache(cpath)
+    if disk_hit is None:
+        return None
+    mode, payload, aux = disk_hit
+    if mode != "float":
+        return None
+    wf = int(aux) if isinstance(aux, int) else 0
+    if not isinstance(payload, torch.Tensor):
+        return None
+    return payload, wf
+
+
 def _save_lines_tensor_cache(path: Path, image: torch.Tensor, width_px: int) -> None:
+    # Не перезаписываем уже валидный .pt (другой воркер мог дописать кэш, пока мы декодировали).
+    if path.is_file():
+        hit = _load_lines_tensor_cache(path)
+        if hit is not None and hit[0] == "float":
+            _, payload, wf_raw = hit
+            wf = int(wf_raw) if isinstance(wf_raw, int) else 0
+            if isinstance(payload, torch.Tensor) and wf == int(width_px):
+                return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".pt.tmp")
     torch.save({"magic": _LINES_PT_CACHE_MAGIC, "image": image.detach().cpu().contiguous(), "width": width_px}, tmp)
@@ -105,6 +158,20 @@ def _save_lines_tensor_cache(path: Path, image: torch.Tensor, width_px: int) -> 
 
 
 def _save_lines_u8_cache(path: Path, image_u8: torch.Tensor, crop_h: int, crop_w: int) -> None:
+    if path.is_file():
+        hit = _load_lines_tensor_cache(path)
+        if hit is not None and hit[0] == "u8":
+            _, payload, aux = hit
+            tup = aux if isinstance(aux, tuple) else (0, 0)
+            ch_, cw_ = int(tup[0]), int(tup[1])
+            if (
+                isinstance(payload, torch.Tensor)
+                and ch_ == int(crop_h)
+                and cw_ == int(crop_w)
+                and int(payload.shape[-2]) == ch_
+                and int(payload.shape[-1]) == cw_
+            ):
+                return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".pt.tmp")
     torch.save(
@@ -468,22 +535,19 @@ class COCOLinesDataset(Dataset):
                     tens_u8, ch, cw = hit_u8
                     if int(tens_u8.shape[-2]) == ch and int(tens_u8.shape[-1]) == cw:
                         return _u8_item(tens_u8)
-            if cache_root is not None and key_hex:
-                cpath = _lines_tensor_cache_path(cache_root, key_hex)
-                disk_hit = _load_lines_tensor_cache(cpath)
-                if disk_hit is not None:
-                    mode, payload, aux = disk_hit
-                    if mode == "u8":
-                        tup = aux if isinstance(aux, tuple) else (0, 0)
-                        ch_, cw_ = int(tup[0]), int(tup[1])
-                        if (
-                            isinstance(payload, torch.Tensor)
-                            and int(payload.shape[-2]) == ch_
-                            and int(payload.shape[-1]) == cw_
-                        ):
-                            if ram is not None:
-                                ram.put_u8(key_hex, payload, ch_, cw_)
-                            return _u8_item(payload)
+
+            def _take_u8_from_disk() -> Optional[Dict[str, Union[torch.Tensor, str, int]]]:
+                u8t = disk_lines_try_u8_cache(cache_root, key_hex)
+                if u8t is None:
+                    return None
+                payload, ch_, cw_ = u8t
+                if ram is not None:
+                    ram.put_u8(key_hex, payload, ch_, cw_)
+                return _u8_item(payload)
+
+            got = _take_u8_from_disk()
+            if got is not None:
+                return got
 
             # Промах кэша: JPEG — байты → collate decode_jpeg(CUDA); PNG — байты → decode_png→CUDA; иначе CPU-декод.
             if self._jpeg_cuda and self.train_augment is None:
@@ -514,6 +578,10 @@ class COCOLinesDataset(Dataset):
                         "text": text,
                     }
 
+            got2 = _take_u8_from_disk()
+            if got2 is not None:
+                return got2
+
             gray_u8 = self._load_sample_gray_u8(img_path, bbox)
             if ram is not None and key_hex:
                 _1c, hh, ww = gray_u8.shape
@@ -533,16 +601,18 @@ class COCOLinesDataset(Dataset):
                 tens_f, ow = hit_ram
                 return _tensor_item_cpu(tens_f, ow)
 
-        if cache_root is not None and key_hex:
-            cpath = _lines_tensor_cache_path(cache_root, key_hex)
-            disk_hit_f = _load_lines_tensor_cache(cpath)
-            if disk_hit_f is not None:
-                mode, payload_f, ow_f = disk_hit_f
-                if mode == "float":
-                    wf = ow_f if isinstance(ow_f, int) else 0
-                    if ram is not None:
-                        ram.put_float(key_hex, payload_f, wf)
-                    return _tensor_item_cpu(payload_f, wf)
+        def _take_float_from_disk() -> Optional[Dict[str, Union[torch.Tensor, str]]]:
+            ft = disk_lines_try_float_cache(cache_root, key_hex)
+            if ft is None:
+                return None
+            payload, wf = ft
+            if ram is not None:
+                ram.put_float(key_hex, payload, wf)
+            return _tensor_item_cpu(payload, wf)
+
+        gotf = _take_float_from_disk()
+        if gotf is not None:
+            return gotf
 
         tens, out_w = self._load_sample_tensors(img_path, bbox)
 

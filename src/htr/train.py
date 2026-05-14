@@ -108,6 +108,20 @@ def _autocast_cuda():
     return cuda_amp.autocast(enabled=True)
 
 
+def _should_write_checkpoint(path: Path, tc: dict) -> bool:
+    """По умолчанию не перезаписывать уже сохранённые модели (checkpoint_overwrite: false)."""
+    if bool(tc.get("checkpoint_overwrite", False)):
+        return True
+    if path.is_file():
+        print(
+            "[htr-train] checkpoint пропуск записи: файл уже есть. "
+            "Чтобы переписать — training.checkpoint_overwrite: true или другой experiment_name / checkpoint_dir.\n"
+            f"  → {path}"
+        )
+        return False
+    return True
+
+
 def _pack_targets(texts_batch: list[str], charset: Charset, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     tensors = [charset.encode(t) for t in texts_batch]
     tlens = torch.tensor([len(x) for x in tensors], dtype=torch.long, device=device)
@@ -956,19 +970,21 @@ def run_training(cfg: dict) -> None:
         save_every = max(1, int(cfg["training"].get("save_every_epochs", 1)))
         if epoch % save_every == 0:
             epath = ckpt_dir / f"{experiment}_e{epoch}.pt"
-            save_checkpoint(
-                str(epath),
-                model.state_dict(),
-                itos=charset.itos,
-                model_name=str(cfg["model"]["name"]),
-                yaml_dump=dict(cfg),
-            )
+            if _should_write_checkpoint(epath, tc):
+                save_checkpoint(
+                    str(epath),
+                    model.state_dict(),
+                    itos=charset.itos,
+                    model_name=str(cfg["model"]["name"]),
+                    yaml_dump=dict(cfg),
+                )
 
     latest_ck = ckpt_dir / "latest.pt"
-    save_checkpoint(
-        str(latest_ck),
-        model.state_dict(),
-        itos=charset.itos,
-        model_name=str(cfg["model"]["name"]),
-        yaml_dump=dict(cfg),
-    )
+    if _should_write_checkpoint(latest_ck, tc):
+        save_checkpoint(
+            str(latest_ck),
+            model.state_dict(),
+            itos=charset.itos,
+            model_name=str(cfg["model"]["name"]),
+            yaml_dump=dict(cfg),
+        )

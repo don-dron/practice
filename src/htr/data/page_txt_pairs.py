@@ -15,10 +15,11 @@ import torchvision.transforms.functional as TF
 
 from htr.data.coco_lines import (
     _RamTensorLRU,
-    _load_lines_tensor_cache,
     _lines_tensor_cache_path,
     _save_lines_tensor_cache,
     _save_lines_u8_cache,
+    disk_lines_try_float_cache,
+    disk_lines_try_u8_cache,
 )
 from htr.cuda_line_batch import (
     LINE_PREP_KEY,
@@ -309,22 +310,19 @@ class PageTxtPairsDataset(Dataset):
                     tens_u8, ch, cw = hit
                     if int(tens_u8.shape[-2]) == ch and int(tens_u8.shape[-1]) == cw:
                         return pack_u8(tens_u8, cw, text)
-            if cache_root is not None and key_hex:
-                hitp = _lines_tensor_cache_path(cache_root, key_hex)
-                loaded = _load_lines_tensor_cache(hitp)
-                if loaded is not None:
-                    mode, payload, aux = loaded
-                    if mode == "u8":
-                        tup = aux if isinstance(aux, tuple) else (0, 0)
-                        ch_, cw_ = int(tup[0]), int(tup[1])
-                        if (
-                            isinstance(payload, torch.Tensor)
-                            and int(payload.shape[-2]) == ch_
-                            and int(payload.shape[-1]) == cw_
-                        ):
-                            if ram is not None:
-                                ram.put_u8(key_hex, payload, ch_, cw_)
-                            return pack_u8(payload, cw_, text)
+
+            def _take_u8_from_disk() -> Optional[Dict[str, Union[torch.Tensor, str, int]]]:
+                u8t = disk_lines_try_u8_cache(cache_root, key_hex)
+                if u8t is None:
+                    return None
+                payload, ch_, cw_ = u8t
+                if ram is not None:
+                    ram.put_u8(key_hex, payload, ch_, cw_)
+                return pack_u8(payload, cw_, text)
+
+            got = _take_u8_from_disk()
+            if got is not None:
+                return got
             if self._png_bytes_collate and self.train_augment is None:
                 data = png_path.read_bytes()
                 jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
@@ -333,6 +331,9 @@ class PageTxtPairsDataset(Dataset):
                     "png_bytes": jb,
                     "text": text,
                 }
+            got2 = _take_u8_from_disk()
+            if got2 is not None:
+                return got2
             u8, out_w = self._load_image_uint8(png_path)
             if ram is not None and key_hex:
                 _c, hh, ww = u8.shape
@@ -352,16 +353,18 @@ class PageTxtPairsDataset(Dataset):
                 tens, out_w = hitf
                 return pack_float(tens, out_w, text)
 
-        if cache_root is not None and key_hex:
-            hitp = _lines_tensor_cache_path(cache_root, key_hex)
-            loaded = _load_lines_tensor_cache(hitp)
-            if loaded is not None:
-                mode, payload, aux = loaded
-                if mode == "float":
-                    wf = int(aux) if isinstance(aux, int) else 0
-                    if ram is not None:
-                        ram.put_float(key_hex, payload, wf)
-                    return pack_float(payload, wf, text)
+        def _take_float_from_disk() -> Optional[Dict[str, Union[torch.Tensor, str]]]:
+            ft = disk_lines_try_float_cache(cache_root, key_hex)
+            if ft is None:
+                return None
+            payload, wf = ft
+            if ram is not None:
+                ram.put_float(key_hex, payload, wf)
+            return pack_float(payload, wf, text)
+
+        gotf = _take_float_from_disk()
+        if gotf is not None:
+            return gotf
 
         tens, out_w = self._load_image_tensor(png_path)
         if ram is not None and key_hex:
