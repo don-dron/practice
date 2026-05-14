@@ -10,6 +10,7 @@ from PIL import Image
 from htr.charset import Charset
 from htr.device import pick_device
 from htr.io.checkpoint import load_checkpoint
+from htr.line_width_limits import clamp_line_width_px
 from htr.models import resolve_model
 from htr.models.attention_line import AttentionLineSeq2Seq
 
@@ -28,9 +29,7 @@ def _prepare_line_batch(pils: List[Image.Image], *, img_height: int, max_width: 
     for pil_item in pils:
         pil_g = TF.rgb_to_grayscale(pil_item.convert("RGB"), num_output_channels=1)
         w_t, h_t = pil_g.size
-        new_w = max(1, round(w_t * img_height / h_t))
-        if max_width is not None and new_w > max_width:
-            new_w = max_width
+        new_w = clamp_line_width_px(w_t * img_height / h_t, max_width=max_width)
         resized = pil_g.resize((new_w, img_height), Image.Resampling.BILINEAR)
         tens = TF.normalize(TF.to_tensor(resized), mean=[0.5], std=[0.5])
         seqs.append(tens)

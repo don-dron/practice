@@ -30,6 +30,7 @@ from htr.cuda_line_batch import (
     U8_KIND_PAGE_READY,
 )
 from htr.transforms import TrainAugmentation
+from htr.line_width_limits import clamp_line_width_px
 
 
 def _page_tensor_cache_key(
@@ -158,9 +159,7 @@ class PageTxtPairsDataset(Dataset):
         else:
             pil = TF.rgb_to_grayscale(pil_rgb, num_output_channels=1)
         w_t, h_t = pil.size
-        new_w = max(1, round(w_t * self.img_height / h_t))
-        if self.max_width is not None and new_w > self.max_width:
-            new_w = self.max_width
+        new_w = clamp_line_width_px(w_t * self.img_height / h_t, max_width=self.max_width)
         crop_resized = pil.resize((new_w, self.img_height), Image.Resampling.BILINEAR)
         tens = TF.to_tensor(crop_resized)
         tens = TF.normalize(tens, mean=[0.5], std=[0.5])
@@ -188,9 +187,9 @@ class PageTxtPairsDataset(Dataset):
         else:
             gray = x01
         _, hi, wi_src = gray.shape
-        new_w = max(1, round(float(wi_src) * float(self.img_height) / float(hi)))
-        if self.max_width is not None:
-            new_w = min(new_w, int(self.max_width))
+        new_w = clamp_line_width_px(
+            float(wi_src) * float(self.img_height) / float(hi), max_width=self.max_width
+        )
         out = F.interpolate(
             gray.unsqueeze(0),
             size=(self.img_height, new_w),
@@ -222,9 +221,9 @@ class PageTxtPairsDataset(Dataset):
         else:
             gray = x01
         _, hi, wi_src = gray.shape
-        new_w = max(1, round(float(wi_src) * float(self.img_height) / float(hi)))
-        if self.max_width is not None:
-            new_w = min(new_w, int(self.max_width))
+        new_w = clamp_line_width_px(
+            float(wi_src) * float(self.img_height) / float(hi), max_width=self.max_width
+        )
         out = F.interpolate(
             gray.unsqueeze(0),
             size=(self.img_height, new_w),
@@ -238,9 +237,7 @@ class PageTxtPairsDataset(Dataset):
         pil_rgb = pil.convert("RGB")
         pil_g = TF.rgb_to_grayscale(pil_rgb, num_output_channels=1)
         w_t, h_t = pil_g.size
-        new_w = max(1, round(w_t * self.img_height / h_t))
-        if self.max_width is not None and new_w > self.max_width:
-            new_w = self.max_width
+        new_w = clamp_line_width_px(w_t * self.img_height / h_t, max_width=self.max_width)
         crop_resized = pil_g.resize((new_w, self.img_height), Image.Resampling.BILINEAR)
         arr = np.asarray(crop_resized, dtype=np.uint8)
         tens = torch.from_numpy(arr).unsqueeze(0).contiguous()

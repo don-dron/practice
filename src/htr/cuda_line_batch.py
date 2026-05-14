@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union, cast
 import torch
 import torch.nn.functional as F
 
+from htr.line_width_limits import clamp_line_width_px
+
 LINE_PREP_KEY = "line_prep"
 LINE_PREP_TENSOR = "tensor"
 LINE_PREP_UINT8 = "uint8"
@@ -127,9 +129,10 @@ def finalize_line_batch_cuda(
         wi = int(w[i].item())
         sl = padded[i : i + 1, :, :hi, :wi].to(device, non_blocking=True).float().div_(255.0)
         if kinds[i] == U8_KIND_COCO_CROP:
-            new_w = max(1, round(float(wi) * float(img_height) / float(max(hi, 1))))
-            if max_width is not None:
-                new_w = min(new_w, int(max_width))
+            new_w = clamp_line_width_px(
+                float(wi) * float(img_height) / float(max(hi, 1)),
+                max_width=max_width,
+            )
             y = F.interpolate(sl, size=(img_height, new_w), mode="bilinear", align_corners=False)
         else:
             # page_ready: уже высота img_height
@@ -238,9 +241,10 @@ def _line_tensor_from_rgb_chw_cuda(
     else:
         gray01 = x01
     _, hi, wi_src = gray01.shape
-    new_w = max(1, round(float(wi_src) * float(img_height) / float(max(hi, 1))))
-    if max_width is not None:
-        new_w = min(new_w, int(max_width))
+    new_w = clamp_line_width_px(
+        float(wi_src) * float(img_height) / float(max(hi, 1)),
+        max_width=max_width,
+    )
     y = F.interpolate(gray01.unsqueeze(0), size=(img_height, new_w), mode="bilinear", align_corners=False).squeeze(0)
     y = y.mul_(2.0).sub_(1.0)
     return y.unsqueeze(0)
@@ -290,9 +294,7 @@ def _chw_cuda_page_to_line_tensor(
     chw = chw_cpu.to(device, non_blocking=True)
     gray01 = _chw_to_gray01_float(chw)
     _, hi, wi_src = gray01.shape
-    new_w = max(1, round(float(wi_src) * float(img_height) / float(hi)))
-    if max_width is not None:
-        new_w = min(new_w, int(max_width))
+    new_w = clamp_line_width_px(float(wi_src) * float(img_height) / float(hi), max_width=max_width)
     y = F.interpolate(gray01.unsqueeze(0), size=(img_height, new_w), mode="bilinear", align_corners=False).squeeze(0)
     y = y.mul_(2.0).sub_(1.0)
     return y.unsqueeze(0)

@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
+
+from htr.line_width_limits import MIN_CRNN_RESIZED_WIDTH_PX
 
 
 class ConvBlock(nn.Sequential):
@@ -67,6 +70,10 @@ class CRNN(nn.Module):
         if h_pix != 32:
             # модель параметрически рассчитана на высоту 32 (как принято в литературе по CRNN);
             raise ValueError(f"ожидается H=32, получено H={h_pix}")
+        if int(widths) < MIN_CRNN_RESIZED_WIDTH_PX:
+            # Узкие строки/артефакты бокса дают W=1..2 → max_pool2d по ширине даёт 0.
+            pad = MIN_CRNN_RESIZED_WIDTH_PX - int(widths)
+            inputs = F.pad(inputs, (0, pad), mode="constant", value=-1.0)
         feats = self.cnn(inputs)
         feats = feats.mean(dim=2)  # среднее по вертикали [b, c, w']
         feats = feats.permute(2, 0, 1)

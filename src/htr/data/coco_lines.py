@@ -25,8 +25,9 @@ from htr.cuda_line_batch import (
     U8_KIND_COCO_CROP,
     U8_KIND_KEY,
 )
+from htr.line_width_limits import clamp_line_width_px
 
-_LINES_PT_CACHE_MAGIC = "htr_lines_pt_v1"
+_LINES_PT_CACHE_MAGIC = "htr_lines_pt_v2"
 _LINES_U8_CACHE_MAGIC = "htr_lines_pt_u8_v1"
 
 
@@ -345,9 +346,7 @@ class COCOLinesDataset(Dataset):
             crop = TF.rgb_to_grayscale(crop, num_output_channels=1)
 
         w_t, h_t = crop.size
-        new_w = max(1, round(w_t * self.img_height / h_t))
-        if self.max_width is not None and new_w > self.max_width:
-            new_w = self.max_width
+        new_w = clamp_line_width_px(w_t * self.img_height / h_t, max_width=self.max_width)
         crop_resized = crop.resize((new_w, self.img_height), Image.Resampling.BILINEAR)
         tens = TF.to_tensor(crop_resized)
         tens = TF.normalize(tens, mean=[0.5], std=[0.5])
@@ -394,9 +393,9 @@ class COCOLinesDataset(Dataset):
         else:
             gray = x01
         _, hi, wi_src = gray.shape
-        new_w = max(1, round(float(wi_src) * float(self.img_height) / float(hi)))
-        if self.max_width is not None:
-            new_w = min(new_w, int(self.max_width))
+        new_w = clamp_line_width_px(
+            float(wi_src) * float(self.img_height) / float(hi), max_width=self.max_width
+        )
         out = F.interpolate(
             gray.unsqueeze(0),
             size=(self.img_height, new_w),
