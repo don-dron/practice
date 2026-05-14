@@ -5,5 +5,5 @@ data:
   val_fraction: 0.03
 
 training:
-  epochs: 2
+  epochs: 5
   lr: 0.05

@@ -1,7 +1,6 @@
 # Базовый конфиг проекта (единственный, если вы всегда передаёте только default.yaml).
-# Ориентир: малая VRAM (~4–8 ГБ), узкая лента (max_width), без cuDNN-свёрток, медленнее но стабильнее по памяти.
-# Большая карта / сервер: добавьте второй YAML — configs/gpu_large.yaml (скорость, batch, LSTM 256, cuDNN+AMP).
-
+# Ориентир: малая VRAM (~4–8 ГБ); при нехватке памяти уменьшайте batch, max_width, или поднимите
+# gradient_accumulation_steps. Большая карта — configs/gpu_large.yaml.
 project:
   seed: 42
   device: "cuda"  # cuda | cpu | mps
@@ -20,10 +19,13 @@ data:
   text_field: "transcription"
   split_annotation: null
   img_height: 32
-  max_width: 192
-  min_crop_width: 4
+  # После ресайза в ленту: w ≈ clamp(w_crop · img_height / h_eff, max=min …). h_eff задаётся floor/cap по высоте bbox.
+  max_width: 512
+  min_crop_width: 12
+  line_resize_height_floor_px: 10
+  line_resize_height_cap_px: 48
   val_fraction: 0
-  train_subsample_divisor: 150
+  train_subsample_divisor: 1  # 1 — все строки; N>1 — подвыборка каждой N-й строки
   num_workers: 0
   dataloader_worker_torch_threads: auto
   windows_dataloader_fast: false
@@ -45,7 +47,7 @@ training:
   hardware_utilization: normal
   main_torch_threads: 2
   batch_size: 1
-  epochs: 2
+  epochs: 5
   gradient_accumulation_steps: 16
   lr: 0.05
   weight_decay: 0.0

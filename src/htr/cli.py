@@ -59,6 +59,7 @@ def infer_main() -> None:
     parser.add_argument("--config", "-c", action="append", default=None)
     parser.add_argument("--checkpoint", type=str, default=None, help="Приоритетнее, чем infer.checkpoint в YAML.")
     parser.add_argument("--device", choices=("cuda", "cpu", "mps"), default="cuda")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Только столбцы path→текст в stdout без пояснений в stderr.")
     parser.add_argument("images", nargs="+")
     args = parser.parse_args()
 
@@ -79,6 +80,13 @@ def infer_main() -> None:
 
     if ck_path is None:
         raise SystemExit("укажите --checkpoint или infer.checkpoint и при необходимости --config")
-    decoded = greedy_decode(Path(ck_path), [Path(i) for i in args.images], device_pref=args.device, img_height=img_h, max_width=max_w)
+    decoded = greedy_decode(
+        Path(ck_path),
+        [Path(i) for i in args.images],
+        device_pref=args.device,
+        img_height=img_h,
+        max_width=max_w,
+        verbose=not args.quiet,
+    )
     for path, txt in zip(args.images, decoded):
         print(f"{path}\t{txt!r}")

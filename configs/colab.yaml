@@ -5,7 +5,7 @@
 # Если снова OOM — уменьшите batch_size или добавьте training.cudnn_enabled: false только в локальном оверлее.
 
 training:
-  epochs: 2
+  epochs: 5
   batch_size: 8
   lr: 0.05
   hardware_utilization: normal

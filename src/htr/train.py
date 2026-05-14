@@ -51,6 +51,17 @@ def _maybe_cuda_empty_cache_after_backward(tc: dict, device: torch.device) -> No
     torch.cuda.empty_cache()
 
 
+def _optional_positive_float_yaml(dc: dict, key: str) -> Optional[float]:
+    raw = dc.get(key)
+    if raw is None:
+        return None
+    try:
+        x = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return x if x > 0 else None
+
+
 def _text_at_index_for_charset(ds: Dataset, idx: int) -> str:
     """Текст по индексу без декодирования изображений (иначе COCO на сотнях тысяч строк «висит» на старте)."""
     if isinstance(ds, Subset):
@@ -734,6 +745,14 @@ def run_training(cfg: dict) -> None:
         print(f"[htr-train] val_max_batches={val_max_batches} (val-метрика только по первым N батчам — быстрее эпоха)")
 
     dc = cfg["data"]
+    lr_floor_px = _optional_positive_float_yaml(dc, "line_resize_height_floor_px")
+    lr_cap_px = _optional_positive_float_yaml(dc, "line_resize_height_cap_px")
+    if lr_floor_px is not None or lr_cap_px is not None:
+        print(
+            "[htr-train] COCO ресайз линии по высоте bbox: "
+            f"floor_px={lr_floor_px} · cap_px={lr_cap_px} "
+            "(ширина ленты ∝ ширина_кропа · img_height / h_eff; см. комментарий в configs/default.yaml)"
+        )
     cpu_line_finalize_uint8 = bool(tc.get("cpu_line_finalize", False))
     nw = _dataload_worker_count(dc)
     _hw_profile = hardware_profile(tc)
@@ -790,6 +809,8 @@ def run_training(cfg: dict) -> None:
                     img_height=int(dc["img_height"]),
                     max_width=dc.get("max_width"),
                     min_crop_width=int(dc.get("min_crop_width", 4)),
+                    line_resize_height_floor_px=lr_floor_px,
+                    line_resize_height_cap_px=lr_cap_px,
                     train_augmentation=train_aug,
                     preprocessed_cache_dir=cr,
                     preprocessed_ram_cache_max_bytes=(ram_per_source if ram_budget_b > 0 else None),
@@ -922,6 +943,8 @@ def run_training(cfg: dict) -> None:
             img_height=int(dc["img_height"]),
             max_width=dc.get("max_width"),
             min_crop_width=int(dc.get("min_crop_width", 4)),
+            line_resize_height_floor_px=lr_floor_px,
+            line_resize_height_cap_px=lr_cap_px,
         )
     elif use_gpu_line_pipe:
         collate_kind = "coco_collate_mixed_lines"
@@ -1141,6 +1164,8 @@ def run_training(cfg: dict) -> None:
                 img_height=int(dc["img_height"]),
                 max_width=dc.get("max_width"),
                 cpu_finalize_uint8_pack=cpu_line_finalize_uint8,
+                line_resize_height_floor_px=lr_floor_px,
+                line_resize_height_cap_px=lr_cap_px,
             )
             images = b_t["image"]  # type: ignore[arg-type]
             texts_batch: list[str] = b_t["text"]  # type: ignore[list-item]
@@ -1287,6 +1312,8 @@ def run_training(cfg: dict) -> None:
                         img_height=int(dc["img_height"]),
                         max_width=dc.get("max_width"),
                         cpu_finalize_uint8_pack=cpu_line_finalize_uint8,
+                        line_resize_height_floor_px=lr_floor_px,
+                        line_resize_height_cap_px=lr_cap_px,
                     )
                     imgs_b = b_v["image"]  # type: ignore[arg-type]
                     refs_txt: list[str] = b_v["text"]  # type: ignore[list-item]

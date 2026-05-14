@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union, cast
 import torch
 import torch.nn.functional as F
 
-from htr.line_width_limits import clamp_line_width_px
+from htr.line_width_limits import clamp_line_width_px, line_resize_effective_height_px
 
 LINE_PREP_KEY = "line_prep"
 LINE_PREP_TENSOR = "tensor"
@@ -99,6 +99,8 @@ def finalize_line_batch_cuda(
     device: torch.device,
     img_height: int,
     max_width: Optional[int],
+    line_resize_height_floor_px: Optional[float] = None,
+    line_resize_height_cap_px: Optional[float] = None,
 ) -> Dict[str, Union[torch.Tensor, List[str]]]:
     """uint8-пакет из collate → float32 [-1,1] на device, seq_width на device."""
     padded = batch["image_u8"]
@@ -129,8 +131,11 @@ def finalize_line_batch_cuda(
         wi = int(w[i].item())
         sl = padded[i : i + 1, :, :hi, :wi].to(device, non_blocking=True).float().div_(255.0)
         if kinds[i] == U8_KIND_COCO_CROP:
+            h_eff = line_resize_effective_height_px(
+                float(hi), floor_px=line_resize_height_floor_px, cap_px=line_resize_height_cap_px
+            )
             new_w = clamp_line_width_px(
-                float(wi) * float(img_height) / float(max(hi, 1)),
+                float(wi) * float(img_height) / h_eff,
                 max_width=max_width,
             )
             y = F.interpolate(sl, size=(img_height, new_w), mode="bilinear", align_corners=False)
@@ -213,6 +218,8 @@ def _line_tensor_from_rgb_chw_cuda(
     img_height: int,
     max_width: Optional[int],
     min_crop_width: float,
+    line_resize_height_floor_px: Optional[float] = None,
+    line_resize_height_cap_px: Optional[float] = None,
 ) -> torch.Tensor:
     """Полная страница RGB uint8 на GPU → линия float [-1,1], форма [1,1,img_height,new_w]."""
     H, W = int(chw_uint8.shape[1]), int(chw_uint8.shape[2])
@@ -241,8 +248,11 @@ def _line_tensor_from_rgb_chw_cuda(
     else:
         gray01 = x01
     _, hi, wi_src = gray01.shape
+    h_eff = line_resize_effective_height_px(
+        float(hi), floor_px=line_resize_height_floor_px, cap_px=line_resize_height_cap_px
+    )
     new_w = clamp_line_width_px(
-        float(wi_src) * float(img_height) / float(max(hi, 1)),
+        float(wi_src) * float(img_height) / float(h_eff),
         max_width=max_width,
     )
     y = F.interpolate(gray01.unsqueeze(0), size=(img_height, new_w), mode="bilinear", align_corners=False).squeeze(0)
@@ -319,6 +329,8 @@ def collate_gpu_lines_jpeg_cuda_batch(
     img_height: int,
     max_width: Optional[int],
     min_crop_width: int,
+    line_resize_height_floor_px: Optional[float] = None,
+    line_resize_height_cap_px: Optional[float] = None,
 ) -> Dict[str, Union[torch.Tensor, List[str], bool, str]]:
     """JPEG: decode_jpeg(..., device=cuda); PNG: decode_png (lib CPU) → CUDA; uint8: finalize на GPU."""
     from htr.data.coco_lines import coco_collate_fn
@@ -364,6 +376,8 @@ def collate_gpu_lines_jpeg_cuda_batch(
                 img_height=img_height,
                 max_width=max_width,
                 min_crop_width=float(min_crop_width),
+                line_resize_height_floor_px=line_resize_height_floor_px,
+                line_resize_height_cap_px=line_resize_height_cap_px,
             )
 
     if idx_png_crop:
@@ -386,6 +400,8 @@ def collate_gpu_lines_jpeg_cuda_batch(
                 img_height=img_height,
                 max_width=max_width,
                 min_crop_width=float(min_crop_width),
+                line_resize_height_floor_px=line_resize_height_floor_px,
+                line_resize_height_cap_px=line_resize_height_cap_px,
             )
 
     if idx_png_page:
@@ -411,7 +427,14 @@ def collate_gpu_lines_jpeg_cuda_batch(
     if idx_u8:
         sub = [batch[i] for i in idx_u8]
         u8_packed = coco_collate_mixed_lines(sub)
-        fin = finalize_line_batch_cuda(u8_packed, device=device, img_height=img_height, max_width=max_width)
+        fin = finalize_line_batch_cuda(
+            u8_packed,
+            device=device,
+            img_height=img_height,
+            max_width=max_width,
+            line_resize_height_floor_px=line_resize_height_floor_px,
+            line_resize_height_cap_px=line_resize_height_cap_px,
+        )
         imgs_u = fin["image"]
         sqw = fin["seq_width"]
         for j, global_i in enumerate(idx_u8):

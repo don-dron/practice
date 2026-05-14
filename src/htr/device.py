@@ -22,6 +22,8 @@ def move_training_image_batch(
     img_height: int,
     max_width: Optional[int],
     cpu_finalize_uint8_pack: bool = False,
+    line_resize_height_floor_px: Optional[float] = None,
+    line_resize_height_cap_px: Optional[float] = None,
 ) -> dict:
     """После collate: ресайз линии + нормализация при uint8-пакете (см. cuda_line_batch).
 
@@ -44,7 +46,12 @@ def move_training_image_batch(
         if cpu_finalize_uint8_pack and device.type in ("cuda", "mps"):
             work_dev = torch.device("cpu")
         finalized = finalize_line_batch_cuda(
-            batch_work, device=work_dev, img_height=img_height, max_width=max_width
+            batch_work,
+            device=work_dev,
+            img_height=img_height,
+            max_width=max_width,
+            line_resize_height_floor_px=line_resize_height_floor_px,
+            line_resize_height_cap_px=line_resize_height_cap_px,
         )
         if work_dev != device:
             return move_batch_to_device(dict(finalized), device)

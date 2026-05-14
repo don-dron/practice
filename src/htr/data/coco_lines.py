@@ -25,7 +25,7 @@ from htr.cuda_line_batch import (
     U8_KIND_COCO_CROP,
     U8_KIND_KEY,
 )
-from htr.line_width_limits import clamp_line_width_px
+from htr.line_width_limits import clamp_line_width_px, line_resize_effective_height_px
 
 _LINES_PT_CACHE_MAGIC = "htr_lines_pt_v2"
 _LINES_U8_CACHE_MAGIC = "htr_lines_pt_u8_v1"
@@ -45,12 +45,18 @@ def _lines_tensor_cache_key(
     cache_namespace: str = "",
     *,
     u8_deferred: bool = False,
+    line_resize_height_floor_px: Optional[float] = None,
+    line_resize_height_cap_px: Optional[float] = None,
 ) -> str:
     fn = fname.replace("\\", "/")
+    geom_token = (
+        round(float(line_resize_height_floor_px), 6) if line_resize_height_floor_px is not None else None,
+        round(float(line_resize_height_cap_px), 6) if line_resize_height_cap_px is not None else None,
+    )
     if cache_namespace:
-        base = (cache_namespace, fn, bbox, img_height, max_width, min_crop_width)
+        base = (cache_namespace, fn, bbox, img_height, max_width, min_crop_width, geom_token)
     else:
-        base = (fn, bbox, img_height, max_width, min_crop_width)
+        base = (fn, bbox, img_height, max_width, min_crop_width, geom_token)
     tup = base + ("u8pre_cuda",) if u8_deferred else base
     payload = repr(tup).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -275,12 +281,24 @@ class COCOLinesDataset(Dataset):
         cache_namespace: str = "",
         defer_resize_normalize_to_cuda: bool = False,
         jpeg_decode_cuda_workers_zero: bool = False,
+        line_resize_height_floor_px: Optional[float] = None,
+        line_resize_height_cap_px: Optional[float] = None,
     ):
         self.image_root = Path(image_root)
         self.text_field = text_field
         self.img_height = img_height
         self.max_width = max_width
         self.min_crop_width = min_crop_width
+        self._lr_floor_px = (
+            float(line_resize_height_floor_px)
+            if line_resize_height_floor_px is not None and float(line_resize_height_floor_px) > 0
+            else None
+        )
+        self._lr_cap_px = (
+            float(line_resize_height_cap_px)
+            if line_resize_height_cap_px is not None and float(line_resize_height_cap_px) > 0
+            else None
+        )
         self.train_augment = train_augmentation
         self._defer_resize_cuda = bool(defer_resize_normalize_to_cuda)
         self._jpeg_cuda = bool(jpeg_decode_cuda_workers_zero)
@@ -346,7 +364,8 @@ class COCOLinesDataset(Dataset):
             crop = TF.rgb_to_grayscale(crop, num_output_channels=1)
 
         w_t, h_t = crop.size
-        new_w = clamp_line_width_px(w_t * self.img_height / h_t, max_width=self.max_width)
+        h_eff = line_resize_effective_height_px(h_t, floor_px=self._lr_floor_px, cap_px=self._lr_cap_px)
+        new_w = clamp_line_width_px(w_t * self.img_height / h_eff, max_width=self.max_width)
         crop_resized = crop.resize((new_w, self.img_height), Image.Resampling.BILINEAR)
         tens = TF.to_tensor(crop_resized)
         tens = TF.normalize(tens, mean=[0.5], std=[0.5])
@@ -393,8 +412,9 @@ class COCOLinesDataset(Dataset):
         else:
             gray = x01
         _, hi, wi_src = gray.shape
+        h_eff = line_resize_effective_height_px(hi, floor_px=self._lr_floor_px, cap_px=self._lr_cap_px)
         new_w = clamp_line_width_px(
-            float(wi_src) * float(self.img_height) / float(hi), max_width=self.max_width
+            float(wi_src) * float(self.img_height) / float(h_eff), max_width=self.max_width
         )
         out = F.interpolate(
             gray.unsqueeze(0),
@@ -502,6 +522,8 @@ class COCOLinesDataset(Dataset):
                 self.min_crop_width,
                 self._cache_namespace,
                 u8_deferred=defer,
+                line_resize_height_floor_px=self._lr_floor_px,
+                line_resize_height_cap_px=self._lr_cap_px,
             )
             if use_key
             else ""
