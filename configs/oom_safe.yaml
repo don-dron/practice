@@ -1,13 +1,19 @@
 # Экстремально мало VRAM / всё ещё CUDA OOM после default (batch 1 + accum 8).
 #   htr-train --config configs/default.yaml --config configs/oom_safe.yaml
+# В начале обучения смотрите строку `[htr-train] line_pipeline:` — там видно,
+# финализация ли uint8/NVJPEG реально на GPU (если нет — cpu_line_finalize не влияет).
 
 training:
   batch_size: 1
   lr: 0.05
   gradient_accumulation_steps: 16
   cudnn_benchmark: false
+  amp: false                          # смягчает память cudnn под mixed precision при узкой VRAM
+  cpu_line_finalize: true             # uint8-батчи: resize/нормализация на CPU, затем один copy на CUDA
   cuda_line_resize_on_device: false
   cuda_jpeg_decode_batched: false
+  # Тормозит эпоху; включено как «крайний рычаг» против фрагментации allocator. Если слишком медленно — false.
+  cuda_empty_cache_after_optimizer_step: true
   val_max_batches: 8
 
 data:

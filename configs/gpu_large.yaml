@@ -4,6 +4,7 @@
 
 training:
   batch_size: 128
+  cudnn_benchmark: true
   cuda_line_resize_on_device: true
   val_max_batches: 120
 data:

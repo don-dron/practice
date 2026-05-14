@@ -85,15 +85,20 @@ training:
   amp: true
   # false — JPEG на CPU в коллате: меньше VRAM (важно при data.num_workers: 0 всё равно одна копия, но без nvJPEG-пика).
   cuda_jpeg_decode_batched: false
-  # false — ресайз/[-1,1] на CPU, на GPU летит уже float-батч: меньше пик VRAM при 8 ГБ.
+  # false — ресайз/[-1,1] на CPU в датасете; на GPU уходит уже float-батч (`coco_collate_fn`). Меньше пик VRAM.
   cuda_line_resize_on_device: false
+  # Если включён пайплайн с uint8+финализацией на GPU (`defer_resize_normalize_to_cuda_dataset`/nvJPEG) — финализация на CPU и один `.to(cuda)`; мягче пик VRAM.
+  cpu_line_finalize: false
   # false — не копить лишние батчи в RAM/очереди при тесной VRAM.
   async_training_batch_prefetch: false
   async_prefetch_queue_size: 1
   # Параллельное чтение только текстов для алфавита (индексы образов не трогаются); для >4096 строк и max/флага
   parallel_charset_text_reads: true
-  cudnn_benchmark: true
+  # false на узкой VRAM: меньше вспомогательной памяти под подбор cudnn-алгоритмов свёрток; сервер без лимита — cudnn_benchmark: true или configs/gpu_large.yaml.
+  cudnn_benchmark: false
   allow_tf32: true
+  # true — после каждого optimizer/step (тяжело по времени): освобождение кеша CUDA против фрагментации allocator при упорном OOM.
+  cuda_empty_cache_after_optimizer_step: false
   # null — при hardware_utilization: max подставится авто в train.py; иначе можно задать явно (напр. 2 для CUDA).
   main_torch_threads: null
   # Усечь val до N батчей (сильно ускоряет эпоху; val-метрика по подвыборке). null = прогонять весь val.

@@ -21,8 +21,13 @@ def move_training_image_batch(
     *,
     img_height: int,
     max_width: Optional[int],
+    cpu_finalize_uint8_pack: bool = False,
 ) -> dict:
-    """После collate: ресайз линии + нормализация на CUDA при uint8-пакете (см. cuda_line_batch)."""
+    """После collate: ресайз линии + нормализация при uint8-пакете (см. cuda_line_batch).
+
+    Если ``cpu_finalize_uint8_pack=True`` и целевое устройство CUDA/MPS — сначала финализация на CPU,
+    затем один перенос float-батча на device (ниже пик временных аллокаций на GPU).
+    """
     from htr.cuda_line_batch import (
         HTR_BATCH_ON_DEVICE,
         finalize_line_batch_cuda,
@@ -35,7 +40,15 @@ def move_training_image_batch(
         return batch_work
 
     if line_batch_needs_cuda_finalize(batch_work):
-        return finalize_line_batch_cuda(batch_work, device=device, img_height=img_height, max_width=max_width)
+        work_dev = device
+        if cpu_finalize_uint8_pack and device.type in ("cuda", "mps"):
+            work_dev = torch.device("cpu")
+        finalized = finalize_line_batch_cuda(
+            batch_work, device=work_dev, img_height=img_height, max_width=max_width
+        )
+        if work_dev != device:
+            return move_batch_to_device(dict(finalized), device)
+        return dict(finalized)
     return move_batch_to_device(batch_work, device)
 
 
