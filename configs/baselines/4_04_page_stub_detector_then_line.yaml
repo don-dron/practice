@@ -44,7 +44,7 @@ model:
 
 training:
   objective: ctc
-  batch_size: 96
+  batch_size: 48
   epochs: 60
   lr: 0.001
   experiment_name: "two_stage_line_placeholder_section44"
