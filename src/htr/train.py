@@ -30,7 +30,7 @@ from htr.hardware_parallel import (
     hardware_profile,
 )
 from htr.eval.metrics import lev_ratio
-from htr.io.checkpoint import save_checkpoint
+from htr.io.checkpoint import load_checkpoint, save_checkpoint
 from htr.models import resolve_model
 from htr.models.attention_line import AttentionLineSeq2Seq
 from htr.models.resnet_pretrained_line_ctc import PretrainedResnetLineCTC
@@ -120,6 +120,70 @@ def _should_write_checkpoint(path: Path, tc: dict) -> bool:
         )
         return False
     return True
+
+
+def _effective_resume_if_checkpoint_exists(tc: dict) -> bool:
+    """
+    Подгружать ли веса при старте. Если resume_if_checkpoint_exists не задан в YAML:
+    при checkpoint_overwrite: false считаем, что нужно продолжить с latest.pt (или resume_checkpoint).
+    """
+    v = tc.get("resume_if_checkpoint_exists")
+    if v is not None:
+        return bool(v)
+    return not bool(tc.get("checkpoint_overwrite", False))
+
+
+def _try_load_training_checkpoint(model: nn.Module, tc: dict, ckpt_dir: Path) -> None:
+    if not _effective_resume_if_checkpoint_exists(tc):
+        return
+
+    resume_raw = tc.get("resume_checkpoint")
+    candidates: List[Path] = []
+    if isinstance(resume_raw, str) and resume_raw.strip():
+        p = Path(resume_raw.strip()).expanduser()
+        candidates.append(p.resolve() if p.is_absolute() else (Path.cwd() / p).resolve())
+    candidates.append((ckpt_dir / "latest.pt").resolve())
+
+    src: Optional[Path] = None
+    payload: dict = {}
+    for cand in candidates:
+        if cand.is_file():
+            payload = load_checkpoint(str(cand))
+            src = cand
+            break
+
+    if src is None:
+        print(
+            "[htr-train] resume: нет файла (resume_checkpoint / checkpoint_dir/latest.pt) — "
+            "обучение с нуля по весам модели."
+        )
+        return
+
+    sd = payload.get("state_dict")
+    if not isinstance(sd, dict):
+        print(f"[htr-train] resume: в {src} нет state_dict — пропуск.")
+        return
+
+    incomp = model.load_state_dict(sd, strict=False)
+    if incomp.missing_keys:
+        nk = len(incomp.missing_keys)
+        sample = incomp.missing_keys[:3]
+        print(f"[htr-train] resume: missing_keys ({nk}), пример: {sample}")
+    if incomp.unexpected_keys:
+        uk = len(incomp.unexpected_keys)
+        sample = incomp.unexpected_keys[:3]
+        print(f"[htr-train] resume: unexpected_keys ({uk}), пример: {sample}")
+
+    print(
+        f"[htr-train] resume: загружены веса из {src} "
+        "(AdamW/скалер с нуля; полный resume оптимизатора в checkpoint пока не сохраняется)."
+    )
+    if not bool(tc.get("checkpoint_overwrite", False)):
+        print(
+            "[htr-train] Внимание: checkpoint_overwrite=false — после эпох записи .pt будут пропущены, если файлы уже "
+            "есть; улучшения останутся только в памяти до перезапуска. Поставьте checkpoint_overwrite: true, чтобы "
+            "сохранить новый результат."
+        )
 
 
 def _pack_targets(texts_batch: list[str], charset: Charset, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -830,6 +894,9 @@ def run_training(cfg: dict) -> None:
             + _extra
         )
     model = resolve_model(cfg, charset.num_classes).to(device)
+    ckpt_dir = Path(str(cfg["training"].get("checkpoint_dir", "training/checkpoints"))).expanduser().resolve()
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    _try_load_training_checkpoint(model, tc, ckpt_dir)
     model = _maybe_torch_compile(model, tc, device)
 
     freeze_ep = _freeze_backbone_epochs(cfg)
@@ -846,8 +913,6 @@ def run_training(cfg: dict) -> None:
     scaler = _make_grad_scaler(enabled=(amp_cfg and device.type == "cuda"))
 
     epochs = int(cfg["training"]["epochs"])
-    ckpt_dir = Path(cfg["training"]["checkpoint_dir"])
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
     experiment = cfg["training"].get("experiment_name", "run")
 
     for epoch in range(1, epochs + 1):

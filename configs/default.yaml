@@ -79,8 +79,13 @@ training:
   checkpoint_dir: "training/checkpoints"
   experiment_name: "multi_yenisei_dp_roo"
   save_every_epochs: 1
-  # false (дефолт): не перезаписывать уже существующие .pt в checkpoint_dir — защита старых прогонов.
+  # false: не перезаписывать уже существующие .pt при сохранении. Также по умолчанию включает resume: загрузка
+  # weights из checkpoint_dir/latest.pt (или training.resume_checkpoint) перед эпохами — иначе каждый запуск «с нуля».
   checkpoint_overwrite: false
+  # Явно: true/false. Если не указано — true когда checkpoint_overwrite: false, иначе false.
+  # resume_if_checkpoint_exists: true
+  # Явный путь к .pt (проверяется первым); иначе берётся checkpoint_dir/latest.pt
+  # resume_checkpoint: null
   amp: true
   # true — nvJPEG в collate в воркерах (больше VRAM по PID). false — декод JPEG в воркерах на CPU, меньше пик VRAM.
   cuda_jpeg_decode_batched: false
