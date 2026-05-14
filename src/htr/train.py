@@ -320,6 +320,11 @@ def _parse_dataloader_worker_torch_threads(dc: dict) -> int:
         return 1
 
 
+def _google_colab_runtime() -> bool:
+    """Среда Google Colab (мало CPU, Jupyter + multiprocessing без persistent_workers надёжнее)."""
+    return bool(os.environ.get("COLAB_RELEASE_TAG"))
+
+
 def _windows_dataloader_fast(dc: dict) -> bool:
     """Временно агрессивнее workers/prefetch на Windows (риск ошибки 1455). YAML или env."""
     ev = os.environ.get("HTR_WIN_DATALOADER_FAST", "").strip().lower()
@@ -349,6 +354,20 @@ def _dataload_worker_count(dc: dict) -> int:
                     f"HTR_WIN_MAX_NUM_WORKERS=N; без капа: =0; стабильно: num_workers 0)"
                 )
                 nw = _cap
+    if _google_colab_runtime():
+        cw = os.environ.get("HTR_COLAB_NUM_WORKERS", "").strip()
+        if cw != "":
+            try:
+                return max(0, int(cw))
+            except ValueError:
+                pass
+        colab_cap = 2
+        if nw > colab_cap:
+            print(
+                f"[htr-train] Google Colab: num_workers {nw} → {colab_cap} (рекомендация рантайма; "
+                f"переопределить: export HTR_COLAB_NUM_WORKERS=N)"
+            )
+            nw = colab_cap
     return nw
 
 
@@ -578,6 +597,8 @@ def run_training(cfg: dict) -> None:
     worker_init_fn = _DataloaderWorkerTorchThreadsInit(wt_threads) if nw > 0 and wt_threads > 0 else None
 
     win_fast = _windows_dataloader_fast(dc) if sys.platform == "win32" else False
+    colab_rt = _google_colab_runtime()
+
     if win_fast and nw > 0:
         print(
             "[htr-train] Windows fast DataLoader: windows_dataloader_fast / HTR_WIN_DATALOADER_FAST=1 "
@@ -593,8 +614,9 @@ def run_training(cfg: dict) -> None:
     if worker_init_fn is not None:
         _dl_common["worker_init_fn"] = worker_init_fn
     if nw > 0:
-        # Windows spawn + shared tensors: без fast-режима persistent_workers усиливает риск 1455.
-        if sys.platform != "win32":
+        if colab_rt:
+            pass  # без persistent_workers (ниже по умолчанию False для Colab)
+        elif sys.platform != "win32":
             _dl_common["persistent_workers"] = True
         elif win_fast:
             _dl_common["persistent_workers"] = True
@@ -604,6 +626,8 @@ def run_training(cfg: dict) -> None:
             _pf = 4
         if sys.platform == "win32":
             _pf = min(_pf, 8 if win_fast else 4)
+        if colab_rt:
+            _pf = min(_pf, 4)
         _dl_common["prefetch_factor"] = _pf
 
     loader_train = DataLoader(train_ds, shuffle=True, batch_size=bs, **_dl_common)
@@ -619,7 +643,10 @@ def run_training(cfg: dict) -> None:
     device = torch.device(resolved)
 
     if nw > 0:
-        _persist = (sys.platform != "win32") or win_fast
+        if colab_rt:
+            _persist = False
+        else:
+            _persist = (sys.platform != "win32") or win_fast
         print(
             f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
             f"persistent_workers={_persist} dataloader_worker_torch_threads="
@@ -643,9 +670,16 @@ def run_training(cfg: dict) -> None:
         f"(torch.cuda.is_available={torch.cuda.is_available()})"
     )
     if device_pref == "cuda" and not torch.cuda.is_available():
+        _extra = ""
+        if _google_colab_runtime():
+            _extra = (
+                " В Colab: Среда выполнения → Изменить тип среды → выберите GPU (например T4), затем Перезапустить сеанс;"
+                " в ячейке: import torch; assert torch.cuda.is_available(); !nvidia-smi."
+            )
         print(
             "[htr-train] WARNING: CUDA requested but not available; training on CPU. "
             "Install GPU build: https://pytorch.org/get-started/locally/"
+            + _extra
         )
     model = resolve_model(cfg, charset.num_classes).to(device)
     model = _maybe_torch_compile(model, tc, device)
