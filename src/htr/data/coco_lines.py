@@ -8,6 +8,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -15,8 +16,17 @@ from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
 
 from htr.transforms import TrainAugmentation
+from htr.cuda_line_batch import (
+    LINE_PREP_JPEG_CUDA,
+    LINE_PREP_KEY,
+    LINE_PREP_TENSOR,
+    LINE_PREP_UINT8,
+    U8_KIND_COCO_CROP,
+    U8_KIND_KEY,
+)
 
 _LINES_PT_CACHE_MAGIC = "htr_lines_pt_v1"
+_LINES_U8_CACHE_MAGIC = "htr_lines_pt_u8_v1"
 
 
 def _lines_tensor_cache_key(
@@ -26,12 +36,15 @@ def _lines_tensor_cache_key(
     max_width: Optional[int],
     min_crop_width: int,
     cache_namespace: str = "",
+    *,
+    u8_deferred: bool = False,
 ) -> str:
     fn = fname.replace("\\", "/")
     if cache_namespace:
-        tup = (cache_namespace, fn, bbox, img_height, max_width, min_crop_width)
+        base = (cache_namespace, fn, bbox, img_height, max_width, min_crop_width)
     else:
-        tup = (fn, bbox, img_height, max_width, min_crop_width)
+        base = (fn, bbox, img_height, max_width, min_crop_width)
+    tup = base + ("u8pre_cuda",) if u8_deferred else base
     payload = repr(tup).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
@@ -41,7 +54,8 @@ def _lines_tensor_cache_path(cache_root: Path, key_hex: str) -> Path:
     return cache_root / key_hex[:2] / f"{key_hex}.pt"
 
 
-def _load_lines_tensor_cache(path: Path) -> Optional[Tuple[torch.Tensor, int]]:
+def _load_lines_tensor_cache(path: Path) -> Optional[Tuple[str, torch.Tensor, Union[int, Tuple[int, int]]]]:
+    """(mode, tensor, meta): meta — seq_w для float или (crop_h,crop_w) для u8."""
     try:
         try:
             payload = torch.load(path, map_location="cpu", weights_only=False)
@@ -51,17 +65,30 @@ def _load_lines_tensor_cache(path: Path) -> Optional[Tuple[torch.Tensor, int]]:
         return None
     if not isinstance(payload, dict):
         return None
-    if payload.get("magic") != _LINES_PT_CACHE_MAGIC:
-        return None
-    im = payload.get("image")
-    w_raw = payload.get("width")
-    if not isinstance(im, torch.Tensor):
-        return None
-    try:
-        w = operator.index(w_raw)
-    except (TypeError, ValueError):
-        return None
-    return im, int(w)
+    mag = payload.get("magic")
+    if mag == _LINES_PT_CACHE_MAGIC:
+        im = payload.get("image")
+        w_raw = payload.get("width")
+        if not isinstance(im, torch.Tensor):
+            return None
+        try:
+            w = operator.index(w_raw)
+        except (TypeError, ValueError):
+            return None
+        return "float", im, int(w)
+    if mag == _LINES_U8_CACHE_MAGIC:
+        im = payload.get("image_u8")
+        ch = payload.get("crop_h")
+        cw = payload.get("crop_w")
+        if not isinstance(im, torch.Tensor) or im.dtype != torch.uint8:
+            return None
+        try:
+            hi = operator.index(ch)
+            wi = operator.index(cw)
+        except (TypeError, ValueError):
+            return None
+        return "u8", im, (int(hi), int(wi))
+    return None
 
 
 def _save_lines_tensor_cache(path: Path, image: torch.Tensor, width_px: int) -> None:
@@ -71,8 +98,23 @@ def _save_lines_tensor_cache(path: Path, image: torch.Tensor, width_px: int) -> 
     os.replace(tmp, path)
 
 
+def _save_lines_u8_cache(path: Path, image_u8: torch.Tensor, crop_h: int, crop_w: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".pt.tmp")
+    torch.save(
+        {
+            "magic": _LINES_U8_CACHE_MAGIC,
+            "image_u8": image_u8.detach().cpu().contiguous(),
+            "crop_h": int(crop_h),
+            "crop_w": int(crop_w),
+        },
+        tmp,
+    )
+    os.replace(tmp, path)
+
+
 class _RamTensorLRU:
-    """LRU хранилище тензоров строк с лимитом по приблизительному числу байт."""
+    """LRU: float-после ресайза (совместимо с page_txt) или uint8-crop перед CUDA-ресайзом."""
 
     OVERHEAD_BYTES = 256
 
@@ -81,35 +123,51 @@ class _RamTensorLRU:
             raise ValueError("max_bytes должен быть > 0")
         self._max_bytes = max_bytes
         self._cur = 0
-        self._od: OrderedDict[str, Tuple[torch.Tensor, int]] = OrderedDict()
+        self._od: OrderedDict[str, dict] = OrderedDict()
 
     @staticmethod
     def payload_bytes(tensor: torch.Tensor) -> int:
         return int(tensor.numel() * tensor.element_size() + _RamTensorLRU.OVERHEAD_BYTES)
 
-    def get(self, key: str) -> Optional[Tuple[torch.Tensor, int]]:
-        pair = self._od.get(key)
-        if pair is None:
+    def get_float(self, key: str) -> Optional[Tuple[torch.Tensor, int]]:
+        """Как раньше: (tensor, width)."""
+        rec = self._od.get(key)
+        if rec is None or rec.get("kind") != "float":
             return None
         self._od.move_to_end(key)
-        return pair
+        return rec["tensor"], int(rec["width"])
 
-    def put(self, key: str, tensor: torch.Tensor, width_px: int) -> None:
+    def put_float(self, key: str, tensor: torch.Tensor, width_px: int) -> None:
         t = tensor.detach().cpu().clone().contiguous()
-        need = self.payload_bytes(t)
+        self._put_any(key, "float", t, width=int(width_px))
+
+    def get_u8(self, key: str) -> Optional[Tuple[torch.Tensor, int, int]]:
+        rec = self._od.get(key)
+        if rec is None or rec.get("kind") != "u8":
+            return None
+        self._od.move_to_end(key)
+        return rec["tensor"], int(rec["ch"]), int(rec["cw"])
+
+    def put_u8(self, key: str, u8: torch.Tensor, ch: int, cw: int) -> None:
+        t = u8.detach().cpu().clone().contiguous()
+        self._put_any(key, "u8", t, ch=int(ch), cw=int(cw))
+
+    def _put_any(self, key: str, kind: str, tensor: torch.Tensor, **extra: object) -> None:
+        need = self.payload_bytes(tensor)
         if need > self._max_bytes:
             return
 
         prev = self._od.pop(key, None)
         if prev is not None:
-            self._cur -= self.payload_bytes(prev[0])
+            self._cur -= self.payload_bytes(prev["tensor"])
 
         while self._cur + need > self._max_bytes and self._od:
-            _, (ev_t, _) = self._od.popitem(last=False)
-            self._cur -= self.payload_bytes(ev_t)
+            _, prev2 = self._od.popitem(last=False)
+            self._cur -= self.payload_bytes(prev2["tensor"])
 
         if self._cur + need <= self._max_bytes:
-            self._od[key] = (t, int(width_px))
+            rec: dict = {"kind": kind, "tensor": tensor, **extra}
+            self._od[key] = rec
             self._cur += need
             self._od.move_to_end(key)
 
@@ -141,6 +199,8 @@ class COCOLinesDataset(Dataset):
         preprocessed_cache_dir: Optional[Union[str, Path]] = None,
         preprocessed_ram_cache_max_bytes: Optional[int] = None,
         cache_namespace: str = "",
+        defer_resize_normalize_to_cuda: bool = False,
+        jpeg_decode_cuda_workers_zero: bool = False,
     ):
         self.image_root = Path(image_root)
         self.text_field = text_field
@@ -148,6 +208,8 @@ class COCOLinesDataset(Dataset):
         self.max_width = max_width
         self.min_crop_width = min_crop_width
         self.train_augment = train_augmentation
+        self._defer_resize_cuda = bool(defer_resize_normalize_to_cuda)
+        self._jpeg_cuda = bool(jpeg_decode_cuda_workers_zero)
         self._cache_namespace = (cache_namespace or "").strip()
         rc = preprocessed_cache_dir
         self.preprocessed_cache_root: Optional[Path] = None
@@ -183,6 +245,13 @@ class COCOLinesDataset(Dataset):
 
         self.samples = samples
 
+        if self._jpeg_cuda and self.train_augment is not None:
+            raise ValueError("jpeg_decode_cuda_workers_zero несовместим с train_augmentation.")
+        if self._defer_resize_cuda and self.train_augment is not None:
+            raise ValueError(
+                "defer_resize_normalize_to_cuda несовместим с train_augmentation "
+                "(аугментации должны остаться на CPU с PIL)."
+            )
         if self.preprocessed_cache_root is not None and self.train_augment is not None:
             raise ValueError(
                 "preprocessed_cache_dir задан совместно с train_augmentation: кэш был бы "
@@ -264,6 +333,70 @@ class COCOLinesDataset(Dataset):
         out = out.mul_(2.0).sub_(1.0)
         return out, new_w
 
+    @staticmethod
+    def _sl_rgb_to_gray_u8(sl: torch.Tensor) -> torch.Tensor:
+        x01 = sl.float().div_(255.0)
+        if sl.shape[0] == 3:
+            gray01 = 0.2989 * x01[0:1] + 0.5870 * x01[1:2] + 0.1140 * x01[2:3]
+        else:
+            gray01 = x01
+        return (gray01 * 255.0).clamp(0.0, 255.0).to(torch.uint8)
+
+    def _decode_crop_gray_u8_torchvision(self, img_path: Path, bbox: Tuple[float, float, float, float]) -> Optional[torch.Tensor]:
+        try:
+            from torchvision.io import read_image
+        except Exception:
+            return None
+        try:
+            chw = read_image(str(img_path))
+        except Exception:
+            return None
+        if chw.dtype != torch.uint8 or chw.dim() != 3:
+            return None
+        ch = int(chw.shape[0])
+        if ch == 4:
+            chw = chw[:3]
+        elif ch not in (1, 3):
+            return None
+        H, W = int(chw.shape[1]), int(chw.shape[2])
+        x, y, bw, bh = _bbox_clip(*bbox, W, H)
+        if bw < float(self.min_crop_width):
+            bw = float(self.min_crop_width)
+            if x + bw > W:
+                x = float(max(0, W - self.min_crop_width))
+        left = int(x)
+        top = int(y)
+        right = int(x + bw)
+        bottom = int(y + bh)
+        left = max(0, min(left, max(0, W - 1)))
+        top = max(0, min(top, max(0, H - 1)))
+        right = max(left + 1, min(W, right))
+        bottom = max(top + 1, min(H, bottom))
+        sl = chw[:, top:bottom, left:right]
+        if sl.numel() == 0:
+            return None
+        return self._sl_rgb_to_gray_u8(sl)
+
+    def _pil_crop_gray_u8(self, crop: Image.Image) -> torch.Tensor:
+        pil_g = TF.rgb_to_grayscale(crop.convert("RGB"), num_output_channels=1)
+        arr = np.asarray(pil_g, dtype=np.uint8)
+        return torch.from_numpy(arr).unsqueeze(0).contiguous()
+
+    def _load_sample_gray_u8(self, img_path: Path, bbox: Tuple[float, float, float, float]) -> torch.Tensor:
+        if self.train_augment is None:
+            tv = self._decode_crop_gray_u8_torchvision(img_path, bbox)
+            if tv is not None:
+                return tv
+        pil = Image.open(img_path).convert("RGB")
+        W, H = pil.size
+        x, y, w, h = _bbox_clip(*bbox, W, H)
+        if w < float(self.min_crop_width):
+            w = float(self.min_crop_width)
+            if x + w > W:
+                x = float(max(0, W - self.min_crop_width))
+        region = pil.crop((int(x), int(y), int(x + w), int(y + h)))
+        return self._pil_crop_gray_u8(region)
+
     def _load_sample_tensors(self, img_path: Path, bbox: Tuple[float, float, float, float]) -> Tuple[torch.Tensor, int]:
         if self.train_augment is None:
             tv = self._decode_crop_resize_torchvision(img_path, bbox)
@@ -282,44 +415,116 @@ class COCOLinesDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, str]]:
         fname, text, bbox = self.samples[idx]
         img_path = self.image_root / fname
+
+        if self._jpeg_cuda and self.train_augment is None:
+            sfx = Path(fname).suffix.lower()
+            if sfx in (".jpg", ".jpeg"):
+                data = img_path.read_bytes()
+                jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                return {
+                    LINE_PREP_KEY: LINE_PREP_JPEG_CUDA,
+                    "jpeg_bytes": jb,
+                    "bbox": bbox,
+                    "text": text,
+                }
+
         ram = self._ram_lru
         cache_root = self.preprocessed_cache_root
+        defer = self._defer_resize_cuda
         use_key = ram is not None or cache_root is not None
 
         key_hex = (
             _lines_tensor_cache_key(
-                fname, bbox, self.img_height, self.max_width, self.min_crop_width, self._cache_namespace
+                fname,
+                bbox,
+                self.img_height,
+                self.max_width,
+                self.min_crop_width,
+                self._cache_namespace,
+                u8_deferred=defer,
             )
             if use_key
             else ""
         )
 
-        def _tensor_item(tens: torch.Tensor, out_w: int) -> Dict[str, Union[torch.Tensor, str]]:
+        def _tensor_item_cpu(tens: torch.Tensor, out_w: int) -> Dict[str, Union[torch.Tensor, str]]:
             return {
+                LINE_PREP_KEY: LINE_PREP_TENSOR,
                 "image": tens.contiguous(),
                 "width": torch.tensor(out_w, dtype=torch.long),
                 "text": text,
             }
 
-        if ram is not None:
-            hit = ram.get(key_hex)
-            if hit is not None:
-                tens, out_w = hit
-                return _tensor_item(tens, out_w)
+        def _u8_item(u8_crop: torch.Tensor) -> Dict[str, Union[torch.Tensor, str, int]]:
+            hi = int(u8_crop.shape[-2])
+            wi = int(u8_crop.shape[-1])
+            return {
+                LINE_PREP_KEY: LINE_PREP_UINT8,
+                "image_u8": u8_crop.contiguous(),
+                "crop_h": hi,
+                "crop_w": wi,
+                U8_KIND_KEY: U8_KIND_COCO_CROP,
+                "text": text,
+            }
 
-        if cache_root is not None:
+        if defer:
+            if ram is not None and key_hex:
+                hit_u8 = ram.get_u8(key_hex)
+                if hit_u8 is not None:
+                    tens_u8, ch, cw = hit_u8
+                    if int(tens_u8.shape[-2]) == ch and int(tens_u8.shape[-1]) == cw:
+                        return _u8_item(tens_u8)
+            if cache_root is not None and key_hex:
+                cpath = _lines_tensor_cache_path(cache_root, key_hex)
+                disk_hit = _load_lines_tensor_cache(cpath)
+                if disk_hit is not None:
+                    mode, payload, aux = disk_hit
+                    if mode == "u8":
+                        tup = aux if isinstance(aux, tuple) else (0, 0)
+                        ch_, cw_ = int(tup[0]), int(tup[1])
+                        if (
+                            isinstance(payload, torch.Tensor)
+                            and int(payload.shape[-2]) == ch_
+                            and int(payload.shape[-1]) == cw_
+                        ):
+                            if ram is not None:
+                                ram.put_u8(key_hex, payload, ch_, cw_)
+                            return _u8_item(payload)
+
+            gray_u8 = self._load_sample_gray_u8(img_path, bbox)
+            if ram is not None and key_hex:
+                _1c, hh, ww = gray_u8.shape
+                ram.put_u8(key_hex, gray_u8, int(hh), int(ww))
+            if cache_root is not None and key_hex:
+                cpath = _lines_tensor_cache_path(cache_root, key_hex)
+                _1x, hh2, ww2 = gray_u8.shape
+                try:
+                    _save_lines_u8_cache(cpath, gray_u8, int(hh2), int(ww2))
+                except Exception:
+                    pass
+            return _u8_item(gray_u8)
+
+        if ram is not None and key_hex:
+            hit_ram = ram.get_float(key_hex)
+            if hit_ram is not None:
+                tens_f, ow = hit_ram
+                return _tensor_item_cpu(tens_f, ow)
+
+        if cache_root is not None and key_hex:
             cpath = _lines_tensor_cache_path(cache_root, key_hex)
-            disk_hit = _load_lines_tensor_cache(cpath)
-            if disk_hit is not None:
-                tens, out_w = disk_hit
-                if ram is not None:
-                    ram.put(key_hex, tens, out_w)
-                return _tensor_item(tens, out_w)
+            disk_hit_f = _load_lines_tensor_cache(cpath)
+            if disk_hit_f is not None:
+                mode, payload_f, ow_f = disk_hit_f
+                if mode == "float":
+                    wf = ow_f if isinstance(ow_f, int) else 0
+                    if ram is not None:
+                        ram.put_float(key_hex, payload_f, wf)
+                    return _tensor_item_cpu(payload_f, wf)
 
         tens, out_w = self._load_sample_tensors(img_path, bbox)
 
         if ram is not None and key_hex:
-            ram.put(key_hex, tens, out_w)
+            ram.put_float(key_hex, tens, out_w)
 
         if cache_root is not None and key_hex:
             cpath = _lines_tensor_cache_path(cache_root, key_hex)
@@ -328,7 +533,7 @@ class COCOLinesDataset(Dataset):
             except Exception:
                 pass
 
-        return _tensor_item(tens, out_w)
+        return _tensor_item_cpu(tens, out_w)
 
 
 def coco_collate_fn(batch: List[Dict[str, Union[torch.Tensor, str]]]) -> Dict[str, Union[torch.Tensor, List[str]]]:

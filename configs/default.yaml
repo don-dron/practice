@@ -36,15 +36,16 @@ data:
   # Скорость vs CPU: меньше воркеров → меньше загрузка CPU, но часто дольше эпоха (GPU ждёт). Реально уменьшить работу
   # CPU на тот же темп — дать заполниться preprocessed_cache_dir (после 1-го прохода декода меньше).
   num_workers: 96
-  # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU, GPU ждёт батч).
-  # 0 — не трогать (старое поведение).
-  dataloader_worker_torch_threads: 1
+  # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU).
+  # auto — при training.hardware_utilization: max; иначе трактуется как 1. Явное число | 0 — не трогать воркер.
+  dataloader_worker_torch_threads: auto
   # Только Windows: временно быстрее подача батча (кап воркеров 8, prefetch до 8, persistent_workers). Или: set HTR_WIN_DATALOADER_FAST=1
   # Риск снова увидеть 1455 — тогда false / убрать env, либо num_workers: 0.
   windows_dataloader_fast: false
 
   augmentation_train: false
-  prefetch_factor: 8
+  # auto: min(16, num_workers) с учётом caps Colab/Windows в коде; или целое число.
+  prefetch_factor: auto
   # После первого прохода датасета — строки как .pt по хэшу (имя файла,bbox,height,max_width,min_width).
   # Снимает декод JPEG на последующих эпохах; не совместимо с augmentation_train: true. Очистка: удалите каталог.
   preprocessed_cache_dir: "training/preprocessed_cache"
@@ -62,6 +63,8 @@ model:
   dropout: 0.0
 
 training:
+  # normal | max | low — по умолчанию max: авто main/interop/OMP, prefetch/worker threads auto; для слабой машины: normal
+  hardware_utilization: max
   batch_size: 1728
   epochs: 20
   lr: 0.0005
@@ -71,10 +74,19 @@ training:
   experiment_name: "multi_yenisei_dp_roo"
   save_every_epochs: 1
   amp: true
+  # Батчевый decode_jpeg(..., device=cuda) в collate (только при data.num_workers: 0 и без page_txt_pairs).
+  cuda_jpeg_decode_batched: false
+  # cuda/mps: билинейный ресайз + нормализация строки после кропа на устройстве; декод страницы — на CPU в воркерах.
+  cuda_line_resize_on_device: true
+  # Пока GPU считает батч N, фоновый поток подтягивает следующие CPU-батчи из DataLoader (CUDA/MPS).
+  async_training_batch_prefetch: true
+  async_prefetch_queue_size: 2
+  # Параллельное чтение только текстов для алфавита (индексы образов не трогаются); для >4096 строк и max/флага
+  parallel_charset_text_reads: true
   cudnn_benchmark: true
   allow_tf32: true
-  # Для CUDA обычно 2 — меньше конкуренции с воркерами; чисто CPU-тренировка — поставьте null.
-  main_torch_threads: 2
+  # null — при hardware_utilization: max подставится авто в train.py; иначе можно задать явно (напр. 2 для CUDA).
+  main_torch_threads: null
   # Усечь val до N батчей (сильно ускоряет эпоху; val-метрика по подвыборке). null = прогонять весь val.
   val_max_batches: 120
   # Только PyTorch 2+ и CUDA: компиляция графа (первый проход медленнее; бывает несовместима с частью моделей).

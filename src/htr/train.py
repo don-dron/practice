@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import functools
 import hashlib
 import os
 import sys
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional
 
 import bisect
 
@@ -15,10 +17,18 @@ from torch.utils.data import ConcatDataset, Dataset
 from tqdm import tqdm
 
 from htr.charset import Charset, charset_from_strings
+from htr.cuda_line_batch import coco_collate_mixed_lines, collate_gpu_lines_jpeg_cuda_batch
 from htr.data.coco_lines import COCOLinesDataset, coco_collate_fn
 from htr.data.page_txt_pairs import PageTxtPairsDataset, _normalize_document_text
 from htr.data.split import Subset, random_split_indices
-from htr.device import move_batch_to_device, pick_device
+from htr.device import move_training_image_batch, pick_device
+from htr.hardware_parallel import (
+    AsyncCpuBatchPrefetcher,
+    apply_main_thread_env_and_torch,
+    effective_dataloader_worker_torch_threads,
+    effective_prefetch_factor,
+    hardware_profile,
+)
 from htr.eval.metrics import lev_ratio
 from htr.io.checkpoint import save_checkpoint
 from htr.models import resolve_model
@@ -46,6 +56,39 @@ def _text_at_index_for_charset(ds: Dataset, idx: int) -> str:
         return _normalize_document_text(raw, ds.max_text_chars)
     item = ds[int(idx)]
     return str(item["text"])
+
+
+def _collect_charset_texts(full_ds: Dataset, train_ix: list[int], tc: dict) -> List[str]:
+    """Чтение подписей для алфавита; при parallel_charset_text_reads или hardware_utilization=max — пул потоков."""
+    n = len(train_ix)
+    prof = hardware_profile(tc)
+    use_parallel = bool(tc.get("parallel_charset_text_reads", False)) or prof == "max"
+    if not use_parallel or n < 4096:
+        if n > 80_000:
+            _it = tqdm(train_ix, desc="[htr-train] тексты для Charset", mininterval=2.0, unit="стр")
+        else:
+            _it = train_ix
+        return [_text_at_index_for_charset(full_ds, int(i)) for i in _it]
+
+    cpu = os.cpu_count() or 8
+    mw = min(32, max(4, cpu // 2))
+    chunk = max(128, n // max(mw * 32, 1))
+
+    def one(ii: int) -> str:
+        return _text_at_index_for_charset(full_ds, int(ii))
+
+    with ThreadPoolExecutor(max_workers=mw) as ex:
+        if n > 80_000:
+            return list(
+                tqdm(
+                    ex.map(one, train_ix, chunksize=chunk),
+                    total=n,
+                    desc="[htr-train] тексты для Charset",
+                    mininterval=2.0,
+                    unit="стр",
+                )
+            )
+        return list(ex.map(one, train_ix, chunksize=chunk))
 
 
 def _make_grad_scaler(enabled: bool):
@@ -82,18 +125,6 @@ def _optional_positive_int(raw: object) -> Optional[int]:
         return n if n > 0 else None
     except (TypeError, ValueError):
         return None
-
-
-def _maybe_apply_main_torch_threads(tc: dict) -> None:
-    mtp = tc.get("main_torch_threads")
-    if mtp is None:
-        return
-    try:
-        mt = max(1, int(mtp))
-        torch.set_num_threads(mt)
-        print(f"[htr-train] main_process torch.set_num_threads({mt})")
-    except (TypeError, ValueError):
-        pass
 
 
 def _maybe_torch_compile(model: nn.Module, tc: dict, device: torch.device) -> nn.Module:
@@ -310,19 +341,16 @@ class _DataloaderWorkerTorchThreadsInit:
             pass
 
 
-def _parse_dataloader_worker_torch_threads(dc: dict) -> int:
-    raw = dc.get("dataloader_worker_torch_threads", 1)
-    if raw is None:
-        return 1
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return 1
-
-
 def _google_colab_runtime() -> bool:
     """Среда Google Colab (мало CPU, Jupyter + multiprocessing без persistent_workers надёжнее)."""
     return bool(os.environ.get("COLAB_RELEASE_TAG"))
+
+
+def _colab_default_dataloader_workers_cap() -> int:
+    """Верхний предел workers на Colab без HTR_COLAB_NUM_WORKERS: не «глушить» в 2 на машинах с 4–12 ядрами."""
+    cpu = os.cpu_count() or 4
+    # Одно ядро оставить под главный процесс; не больше 8 — ограничение RAM/процессов типичного сеанса.
+    return max(2, min(8, max(1, cpu - 1)))
 
 
 def _windows_dataloader_fast(dc: dict) -> bool:
@@ -361,11 +389,12 @@ def _dataload_worker_count(dc: dict) -> int:
                 return max(0, int(cw))
             except ValueError:
                 pass
-        colab_cap = 2
+        colab_cap = _colab_default_dataloader_workers_cap()
         if nw > colab_cap:
             print(
-                f"[htr-train] Google Colab: num_workers {nw} → {colab_cap} (рекомендация рантайма; "
-                f"переопределить: export HTR_COLAB_NUM_WORKERS=N)"
+                f"[htr-train] Google Colab: num_workers {nw} → {colab_cap} "
+                f"(адаптивно по cpu_count≈{os.cpu_count()}, без перегрузки RAM; свой предел: "
+                "export HTR_COLAB_NUM_WORKERS=N; отключить воркеры: =0)"
             )
             nw = colab_cap
     return nw
@@ -480,18 +509,53 @@ def run_training(cfg: dict) -> None:
     seed = int(cfg["project"]["seed"])
     torch.manual_seed(seed)
     tc = cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
-    _maybe_apply_main_torch_threads(tc)
     val_max_batches = _optional_positive_int(tc.get("val_max_batches"))
     if val_max_batches is not None:
         print(f"[htr-train] val_max_batches={val_max_batches} (val-метрика только по первым N батчам — быстрее эпоха)")
 
     dc = cfg["data"]
     nw = _dataload_worker_count(dc)
+    _hw_profile = hardware_profile(tc)
+    wt_threads = effective_dataloader_worker_torch_threads(dc, _hw_profile, nw)
+    apply_main_thread_env_and_torch(tc, nw=nw, wt_per_worker=max(1, wt_threads))
+    if _hw_profile == "max":
+        print(
+            "[htr-train] hardware_utilization=max: усилен параллелизм CPU (main/interop threads, опционально OMP); "
+            "prefetch_factor=auto и dataloader_worker_torch_threads=auto см. в конфиге/логах."
+        )
+
     ram_budget_b, ram_gb_yaml = _preprocessed_ram_budget(dc, nw)
 
     train_aug = TrainAugmentation() if bool(dc.get("augmentation_train", False)) else None
 
+    device_pref_early = str(cfg["project"].get("device", "cuda"))
+    resolved_for_lines = pick_device(device_pref_early)
+    lines_dev = torch.device(resolved_for_lines)
+    use_gpu_line_pipe = (
+        lines_dev.type in ("cuda", "mps")
+        and bool(tc.get("cuda_line_resize_on_device", True))
+        and train_aug is None
+    )
+
     entries = _training_source_entries(dc)
+    has_page_txt_source = any(str(e.get("kind")) == "page_txt_pairs" for e in entries)
+
+    if bool(tc.get("cuda_jpeg_decode_batched", False)) and nw != 0:
+        print("[htr-train] cuda_jpeg_decode_batched: нужен data.num_workers: 0 — режим decode_jpeg(CUDA) отключён.")
+    use_cuda_jpeg = (
+        lines_dev.type == "cuda"
+        and nw == 0
+        and bool(tc.get("cuda_jpeg_decode_batched", False))
+        and train_aug is None
+        and use_gpu_line_pipe
+        and not has_page_txt_source
+    )
+    if use_cuda_jpeg:
+        print(
+            "[htr-train] JPEG (batched GPU): torchvision.io.decode_jpeg(..., device=cuda) в главном процессе; "
+            "PNG остаётся CPU-декод → uint8 crop как раньше."
+        )
+
     n_src = len(entries)
     ram_per_source = max(1024, ram_budget_b // max(1, n_src)) if ram_budget_b > 0 else 0
 
@@ -514,6 +578,8 @@ def run_training(cfg: dict) -> None:
                     preprocessed_cache_dir=cr,
                     preprocessed_ram_cache_max_bytes=(ram_per_source if ram_budget_b > 0 else None),
                     cache_namespace=str(ent.get("cache_namespace", "") or ""),
+                    defer_resize_normalize_to_cuda=use_gpu_line_pipe,
+                    jpeg_decode_cuda_workers_zero=use_cuda_jpeg,
                 )
             )
         elif k == "page_txt_pairs":
@@ -529,6 +595,7 @@ def run_training(cfg: dict) -> None:
                         preprocessed_ram_cache_max_bytes=(ram_per_source if ram_budget_b > 0 else None),
                         cache_namespace=str(ent.get("cache_namespace", "") or ""),
                         max_text_chars=ent.get("max_text_chars"),
+                        defer_resize_normalize_to_cuda=use_gpu_line_pipe,
                     )
                 )
                 kinds.append(k)
@@ -571,11 +638,7 @@ def run_training(cfg: dict) -> None:
         print(
             "[htr-train] сбор алфавита: читаем только подписи из разметки (без JPEG/PNG — иначе старт занимал бы часы)…"
         )
-    if len(train_ix) > 80_000:
-        _ti = tqdm(train_ix, desc="[htr-train] тексты для Charset", mininterval=2.0, unit="стр")
-    else:
-        _ti = train_ix
-    texts_train = [_text_at_index_for_charset(full_ds, i) for i in _ti]
+    texts_train = _collect_charset_texts(full_ds, train_ix, tc)
 
     extra = cfg.get("charset", {}).get("extra_chars") or ""
     charset = charset_from_strings(texts_train, extra)
@@ -593,11 +656,10 @@ def run_training(cfg: dict) -> None:
 
     bs = int(cfg["training"]["batch_size"])
 
-    wt_threads = _parse_dataloader_worker_torch_threads(dc)
-    worker_init_fn = _DataloaderWorkerTorchThreadsInit(wt_threads) if nw > 0 and wt_threads > 0 else None
-
     win_fast = _windows_dataloader_fast(dc) if sys.platform == "win32" else False
     colab_rt = _google_colab_runtime()
+
+    worker_init_fn = _DataloaderWorkerTorchThreadsInit(wt_threads) if nw > 0 and wt_threads > 0 else None
 
     if win_fast and nw > 0:
         print(
@@ -606,9 +668,21 @@ def run_training(cfg: dict) -> None:
         )
 
     _pin_memory = torch.cuda.is_available()
+    if use_cuda_jpeg:
+        _collate = functools.partial(
+            collate_gpu_lines_jpeg_cuda_batch,
+            device=lines_dev,
+            img_height=int(dc["img_height"]),
+            max_width=dc.get("max_width"),
+            min_crop_width=int(dc.get("min_crop_width", 4)),
+        )
+    elif use_gpu_line_pipe:
+        _collate = coco_collate_mixed_lines
+    else:
+        _collate = coco_collate_fn
     _dl_common: dict = {
         "num_workers": nw,
-        "collate_fn": coco_collate_fn,
+        "collate_fn": _collate,
         "pin_memory": _pin_memory,
     }
     if worker_init_fn is not None:
@@ -621,13 +695,9 @@ def run_training(cfg: dict) -> None:
         elif win_fast:
             _dl_common["persistent_workers"] = True
         try:
-            _pf = max(2, min(16, int(dc.get("prefetch_factor", 4))))
-        except (TypeError, ValueError):
+            _pf = effective_prefetch_factor(dc, nw, colab_rt=colab_rt, win_fast=win_fast)
+        except Exception:
             _pf = 4
-        if sys.platform == "win32":
-            _pf = min(_pf, 8 if win_fast else 4)
-        if colab_rt:
-            _pf = min(_pf, 4)
         _dl_common["prefetch_factor"] = _pf
 
     loader_train = DataLoader(train_ds, shuffle=True, batch_size=bs, **_dl_common)
@@ -638,9 +708,17 @@ def run_training(cfg: dict) -> None:
         **_dl_common,
     )
 
-    device_pref = cfg["project"].get("device", "cuda")
-    resolved = pick_device(device_pref)
-    device = torch.device(resolved)
+    train_loop_outer: object = loader_train
+    if bool(tc.get("async_training_batch_prefetch", False)) and lines_dev.type in ("cuda", "mps"):
+        qsz = max(1, min(8, int(tc.get("async_prefetch_queue_size", 2))))
+        train_loop_outer = AsyncCpuBatchPrefetcher(loader_train, max_queue=qsz)
+        print(
+            f"[htr-train] async_training_batch_prefetch: до {qsz} CPU-батчей в фоне, пока GPU считает предыдущий"
+        )
+
+    device_pref = device_pref_early
+    resolved = resolved_for_lines
+    device = lines_dev
 
     if nw > 0:
         if colab_rt:
@@ -653,10 +731,14 @@ def run_training(cfg: dict) -> None:
             f"{wt_threads if wt_threads > 0 else 'off'}"
         )
         if device.type == "cuda" and worker_init_fn is not None:
-            print(
-                "[htr-train] подсказка: высокий CPU и низкая загрузка GPU при декоде JPEG — норма; "
-                "усилить GPU: batch_size↑, preprocessed_cache_dir (SSD), num_workers ≈ числу ядер без гиперпростоя."
+            hint = (
+                "[htr-train] подсказка: высокий CPU и низкая загрузка GPU при декоде JPEG — норма, "
+                "особенно пока не заполнился preprocessed_cache_dir (первая эпоха дольше, дальше обычно быстрее). "
+                "Усилить подачу: больше data.num_workers под ваш CPU, SSD под кэш, при необходимости batch_size↑."
             )
+            if colab_rt:
+                hint += " На Colab: export HTR_COLAB_NUM_WORKERS=6 (или ваш лимит) если ещё медленно."
+            print(hint)
 
     if device.type == "cuda":
         if tc.get("cudnn_benchmark", True):
@@ -669,6 +751,11 @@ def run_training(cfg: dict) -> None:
         f"[htr-train] device: requested={device_pref!r} -> {device!r} "
         f"(torch.cuda.is_available={torch.cuda.is_available()})"
     )
+    if use_gpu_line_pipe:
+        print(
+            "[htr-train] линии (GPU prep): билинейный ресайз + нормализация [-1,1] на устройстве; "
+            "декод файла страницы и вырезка bbox выполняются на CPU в воркерах DataLoader."
+        )
     if device_pref == "cuda" and not torch.cuda.is_available():
         _extra = ""
         if _google_colab_runtime():
@@ -709,9 +796,14 @@ def run_training(cfg: dict) -> None:
         model.train()
         total_loss = 0.0
         nb_tr = 0
-        train_bar = tqdm(loader_train, desc=f"epoch {epoch}/{epochs}", leave=False)
+        train_bar = tqdm(train_loop_outer, desc=f"epoch {epoch}/{epochs}", leave=False)
         for batch in train_bar:
-            b_t = move_batch_to_device(batch, device)
+            b_t = move_training_image_batch(
+                batch,
+                device,
+                img_height=int(dc["img_height"]),
+                max_width=dc.get("max_width"),
+            )
             images = b_t["image"]  # type: ignore[arg-type]
             texts_batch: list[str] = b_t["text"]  # type: ignore[list-item]
 
@@ -783,7 +875,12 @@ def run_training(cfg: dict) -> None:
                 for vb_i, vbatch in enumerate(tqdm(loader_val, desc=f"val {epoch}", leave=False)):
                     if val_max_batches is not None and vb_i >= val_max_batches:
                         break
-                    b_v = move_batch_to_device(vbatch, device)
+                    b_v = move_training_image_batch(
+                        vbatch,
+                        device,
+                        img_height=int(dc["img_height"]),
+                        max_width=dc.get("max_width"),
+                    )
                     imgs_b = b_v["image"]  # type: ignore[arg-type]
                     refs_txt: list[str] = b_v["text"]  # type: ignore[list-item]
                     if objective == "attention_ce" and isinstance(model, AttentionLineSeq2Seq):

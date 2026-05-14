@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -17,6 +18,14 @@ from htr.data.coco_lines import (
     _load_lines_tensor_cache,
     _lines_tensor_cache_path,
     _save_lines_tensor_cache,
+    _save_lines_u8_cache,
+)
+from htr.cuda_line_batch import (
+    LINE_PREP_KEY,
+    LINE_PREP_TENSOR,
+    LINE_PREP_UINT8,
+    U8_KIND_KEY,
+    U8_KIND_PAGE_READY,
 )
 from htr.transforms import TrainAugmentation
 
@@ -27,9 +36,13 @@ def _page_tensor_cache_key(
     max_width: Optional[int],
     max_text_chars: Optional[int],
     cache_namespace: str,
+    *,
+    u8_deferred: bool = False,
 ) -> str:
     rel = rel_path.replace("\\", "/")
-    payload = repr((cache_namespace or "", rel, img_height, max_width, max_text_chars)).encode("utf-8")
+    base = (cache_namespace or "", rel, img_height, max_width, max_text_chars)
+    tup = base + ("u8pre_cuda",) if u8_deferred else base
+    payload = repr(tup).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -87,6 +100,7 @@ class PageTxtPairsDataset(Dataset):
         preprocessed_ram_cache_max_bytes: Optional[int] = None,
         cache_namespace: str = "page_txt",
         max_text_chars: Optional[int] = None,
+        defer_resize_normalize_to_cuda: bool = False,
     ):
         self.pair_root = Path(pair_root).expanduser().resolve()
         self.samples = discover_page_txt_pairs(self.pair_root)
@@ -100,6 +114,7 @@ class PageTxtPairsDataset(Dataset):
         self.train_augment = train_augmentation
         self._cache_namespace = (cache_namespace or "").strip()
         self.max_text_chars = max_text_chars
+        self._defer_resize_cuda = bool(defer_resize_normalize_to_cuda)
 
         rc = preprocessed_cache_dir
         self.preprocessed_cache_root: Optional[Path] = None
@@ -113,6 +128,8 @@ class PageTxtPairsDataset(Dataset):
         if _rb is not None and int(_rb) > 0:
             self._ram_lru = _RamTensorLRU(int(_rb))
 
+        if self._defer_resize_cuda and self.train_augment is not None:
+            raise ValueError("defer_resize_normalize_to_cuda несовместим с augmentation_train для page_txt_pairs.")
         if self.preprocessed_cache_root is not None and self.train_augment is not None:
             raise ValueError("preprocessed_cache_dir несовместим с augmentation_train для page_txt_pairs.")
         if self._ram_lru is not None and self.train_augment is not None:
@@ -177,6 +194,59 @@ class PageTxtPairsDataset(Dataset):
         out = out.mul_(2.0).sub_(1.0)
         return out, new_w
 
+    def _tensor_tv_uint8_ready(self, path: Path) -> Optional[Tuple[torch.Tensor, int]]:
+        try:
+            from torchvision.io import read_image
+        except Exception:
+            return None
+        try:
+            chw = read_image(str(path))
+        except Exception:
+            return None
+        if chw.dtype != torch.uint8 or chw.dim() != 3:
+            return None
+        ch = int(chw.shape[0])
+        if ch == 4:
+            chw = chw[:3]
+        elif ch not in (1, 3):
+            return None
+        x01 = chw.float().div_(255.0)
+        if chw.shape[0] == 3:
+            gray = 0.2989 * x01[0:1] + 0.5870 * x01[1:2] + 0.1140 * x01[2:3]
+        else:
+            gray = x01
+        _, hi, wi_src = gray.shape
+        new_w = max(1, round(float(wi_src) * float(self.img_height) / float(hi)))
+        if self.max_width is not None:
+            new_w = min(new_w, int(self.max_width))
+        out = F.interpolate(
+            gray.unsqueeze(0),
+            size=(self.img_height, new_w),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+        gu8 = (out.clamp(0.0, 1.0).mul_(255.0)).to(torch.uint8)
+        return gu8, int(gu8.shape[-1])
+
+    def _pil_uint8_ready(self, pil: Image.Image) -> Tuple[torch.Tensor, int]:
+        pil_rgb = pil.convert("RGB")
+        pil_g = TF.rgb_to_grayscale(pil_rgb, num_output_channels=1)
+        w_t, h_t = pil_g.size
+        new_w = max(1, round(w_t * self.img_height / h_t))
+        if self.max_width is not None and new_w > self.max_width:
+            new_w = self.max_width
+        crop_resized = pil_g.resize((new_w, self.img_height), Image.Resampling.BILINEAR)
+        arr = np.asarray(crop_resized, dtype=np.uint8)
+        tens = torch.from_numpy(arr).unsqueeze(0).contiguous()
+        return tens, int(tens.shape[-1])
+
+    def _load_image_uint8(self, png_path: Path) -> Tuple[torch.Tensor, int]:
+        if self.train_augment is None:
+            tv = self._tensor_tv_uint8_ready(png_path)
+            if tv is not None:
+                return tv
+        return self._pil_uint8_ready(Image.open(png_path))
+
     def _load_image_tensor(self, png_path: Path) -> Tuple[torch.Tensor, int]:
         if self.train_augment is None:
             tv = self._tensor_tv_full(png_path)
@@ -197,41 +267,96 @@ class PageTxtPairsDataset(Dataset):
 
         key_hex = (
             _page_tensor_cache_key(
-                rel_k, self.img_height, self.max_width, self.max_text_chars, self._cache_namespace
+                rel_k,
+                self.img_height,
+                self.max_width,
+                self.max_text_chars,
+                self._cache_namespace,
+                u8_deferred=self._defer_resize_cuda,
             )
             if use_key
             else ""
         )
 
-        def pack(tens: torch.Tensor, w: int, tx: str) -> Dict[str, Union[torch.Tensor, str]]:
+        def pack_float(tens: torch.Tensor, w: int, tx: str) -> Dict[str, Union[torch.Tensor, str]]:
             return {
+                LINE_PREP_KEY: LINE_PREP_TENSOR,
                 "image": tens.contiguous(),
                 "width": torch.tensor(w, dtype=torch.long),
                 "text": tx,
             }
 
-        if ram is not None:
-            hit = ram.get(key_hex)
-            if hit is not None:
-                tens, out_w = hit
-                return pack(tens, out_w, text)
+        def pack_u8(u8: torch.Tensor, w: int, tx: str) -> Dict[str, Union[torch.Tensor, str, int]]:
+            return {
+                LINE_PREP_KEY: LINE_PREP_UINT8,
+                "image_u8": u8.contiguous(),
+                "crop_h": int(self.img_height),
+                "crop_w": int(w),
+                U8_KIND_KEY: U8_KIND_PAGE_READY,
+                "text": tx,
+            }
 
-        if cache_root is not None:
+        defer = self._defer_resize_cuda
+        if defer:
+            if ram is not None and key_hex:
+                hit = ram.get_u8(key_hex)
+                if hit is not None:
+                    tens_u8, ch, cw = hit
+                    if int(tens_u8.shape[-2]) == ch and int(tens_u8.shape[-1]) == cw:
+                        return pack_u8(tens_u8, cw, text)
+            if cache_root is not None and key_hex:
+                hitp = _lines_tensor_cache_path(cache_root, key_hex)
+                loaded = _load_lines_tensor_cache(hitp)
+                if loaded is not None:
+                    mode, payload, aux = loaded
+                    if mode == "u8":
+                        tup = aux if isinstance(aux, tuple) else (0, 0)
+                        ch_, cw_ = int(tup[0]), int(tup[1])
+                        if (
+                            isinstance(payload, torch.Tensor)
+                            and int(payload.shape[-2]) == ch_
+                            and int(payload.shape[-1]) == cw_
+                        ):
+                            if ram is not None:
+                                ram.put_u8(key_hex, payload, ch_, cw_)
+                            return pack_u8(payload, cw_, text)
+            u8, out_w = self._load_image_uint8(png_path)
+            if ram is not None and key_hex:
+                _c, hh, ww = u8.shape
+                ram.put_u8(key_hex, u8, int(hh), int(ww))
+            if cache_root is not None and key_hex:
+                hp = _lines_tensor_cache_path(cache_root, key_hex)
+                _c2, hh2, ww2 = u8.shape
+                try:
+                    _save_lines_u8_cache(hp, u8, int(hh2), int(ww2))
+                except Exception:
+                    pass
+            return pack_u8(u8, out_w, text)
+
+        if ram is not None and key_hex:
+            hitf = ram.get_float(key_hex)
+            if hitf is not None:
+                tens, out_w = hitf
+                return pack_float(tens, out_w, text)
+
+        if cache_root is not None and key_hex:
             hitp = _lines_tensor_cache_path(cache_root, key_hex)
             loaded = _load_lines_tensor_cache(hitp)
             if loaded is not None:
-                tens, out_w = loaded
-                if ram is not None:
-                    ram.put(key_hex, tens, out_w)
-                return pack(tens, out_w, text)
+                mode, payload, aux = loaded
+                if mode == "float":
+                    wf = int(aux) if isinstance(aux, int) else 0
+                    if ram is not None:
+                        ram.put_float(key_hex, payload, wf)
+                    return pack_float(payload, wf, text)
 
         tens, out_w = self._load_image_tensor(png_path)
         if ram is not None and key_hex:
-            ram.put(key_hex, tens, out_w)
+            ram.put_float(key_hex, tens, out_w)
         if cache_root is not None and key_hex:
             hp = _lines_tensor_cache_path(cache_root, key_hex)
             try:
                 _save_lines_tensor_cache(hp, tens, out_w)
             except Exception:
                 pass
-        return pack(tens, out_w, text)
+        return pack_float(tens, out_w, text)

@@ -1,0 +1,4 @@
+# Раньше здесь включали «максимум»; те же значения теперь заданы в configs/default.yaml по умолчанию.
+# Совместимость: дополнительный `--config configs/hardware_max.yaml` не меняет поведение.
+# Чтобы снизить нагрузку: training.hardware_utilization: normal; при необходимости num_workers, batch_size, prefetch_factor.
+{}
