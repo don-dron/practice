@@ -20,6 +20,46 @@ U8_KIND_COCO_CROP = "coco_crop"
 U8_KIND_PAGE_READY = "page_ready"
 HTR_BATCH_ON_DEVICE = "_htr_lines_on_device"
 
+# Лог один раз: батчевый nvJPEG упал → поштучный CPU/GPU fallback
+_jpeg_cuda_batch_fallback_logged = False
+
+
+def _decode_jpeg_bytes_list_cuda_with_cpu_fallback(
+    byte_tensors: List[torch.Tensor],
+    device: torch.device,
+) -> List[torch.Tensor]:
+    """Батч decode_jpeg(CUDA); при сбое nvJPEG (редкие JPEG / один битый кадр) — поштучно CUDA→CPU."""
+    global _jpeg_cuda_batch_fallback_logged
+    try:
+        from torchvision.io import decode_jpeg
+    except Exception as ex:
+        raise RuntimeError("torchvision.io.decode_jpeg недоступен") from ex
+
+    try:
+        out = decode_jpeg(byte_tensors, device=device)
+        if not isinstance(out, (list, tuple)):
+            return [out]
+        return list(out)
+    except RuntimeError:
+        if not _jpeg_cuda_batch_fallback_logged:
+            print(
+                "[htr-train] decode_jpeg: батч на CUDA не удался (nvJPEG/формат) — поштучно; при необходимости CPU."
+            )
+            _jpeg_cuda_batch_fallback_logged = True
+        cpu = torch.device("cpu")
+        decoded: List[torch.Tensor] = []
+        for jb in byte_tensors:
+            try:
+                d = decode_jpeg(jb, device=device)
+            except RuntimeError:
+                d = decode_jpeg(jb, device=cpu)
+                d = d.to(device, non_blocking=True)
+            if isinstance(d, (list, tuple)):
+                decoded.extend(d)
+            else:
+                decoded.append(d)
+        return decoded
+
 
 def line_batch_needs_cuda_finalize(batch: dict) -> bool:
     return batch.get(LINE_PREP_KEY) == LINE_PREP_UINT8
@@ -285,14 +325,8 @@ def collate_gpu_lines_jpeg_cuda_batch(
     row_tensors: List[Optional[torch.Tensor]] = [None] * bsz
 
     if idx_jpeg:
-        try:
-            from torchvision.io import decode_jpeg
-        except Exception as ex:
-            raise RuntimeError("torchvision.io.decode_jpeg недоступен") from ex
         byte_tensors = [batch[i]["jpeg_bytes"] for i in idx_jpeg]  # type: ignore[misc]
-        decoded = decode_jpeg(byte_tensors, device=device)
-        if not isinstance(decoded, (list, tuple)):
-            decoded = [decoded]
+        decoded = _decode_jpeg_bytes_list_cuda_with_cpu_fallback(byte_tensors, device)
         if len(decoded) != len(idx_jpeg):
             raise RuntimeError("decode_jpeg: число кадров не совпало с числом JPEG в батче")
         for idx_flat, img_tensor in zip(idx_jpeg, decoded):
