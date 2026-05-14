@@ -34,7 +34,7 @@ model:
 
 training:
   objective: ctc
-  batch_size: 264
+  batch_size: 792
   epochs: 20
   lr: 0.001
   experiment_name: "pretrained_backbone_section45"

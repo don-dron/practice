@@ -35,7 +35,7 @@ model:
 training:
   objective: attention_ce
   decoder_max_steps: 512
-  batch_size: 672
+  batch_size: 2016
   epochs: 20
   lr: 0.001
   experiment_name: "line_attention_section42"
