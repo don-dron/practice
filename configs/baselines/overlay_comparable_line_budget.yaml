@@ -5,9 +5,9 @@
 data:
   max_width: 900
   val_fraction: 0.03
-  num_workers: 12
+  num_workers: 96
 
 training:
-  batch_size: 144
+  batch_size: 1152
   epochs: 20
   lr: 0.001

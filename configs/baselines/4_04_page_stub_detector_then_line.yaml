@@ -31,7 +31,7 @@ data:
   img_height: 32
   max_width: 900
   val_fraction: 0.03
-  num_workers: 12
+  num_workers: 96
   augmentation_train: false
 
 model:
@@ -44,7 +44,7 @@ model:
 
 training:
   objective: ctc
-  batch_size: 72
+  batch_size: 576
   epochs: 20
   lr: 0.001
   experiment_name: "two_stage_line_placeholder_section44"

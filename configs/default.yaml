@@ -35,7 +35,7 @@ data:
   val_fraction: 0.05                   # простой случайный hold-out если отдельного val-json нет
   # Скорость vs CPU: меньше воркеров → меньше загрузка CPU, но часто дольше эпоха (GPU ждёт). Реально уменьшить работу
   # CPU на тот же темп — дать заполниться preprocessed_cache_dir (после 1-го прохода декода меньше).
-  num_workers: 12
+  num_workers: 96
   # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU, GPU ждёт батч).
   # 0 — не трогать (старое поведение).
   dataloader_worker_torch_threads: 1
@@ -62,7 +62,7 @@ model:
   dropout: 0.0
 
 training:
-  batch_size: 144
+  batch_size: 1152
   epochs: 20
   lr: 0.0005
   weight_decay: 0.0
