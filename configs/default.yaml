@@ -6,19 +6,14 @@ project:
 
 data:
   kind: coco_lines
-  # По умолчанию — два строковых COCO-корпуса (Yenisei + Digital Peter). Оверлеи не трогают sources → смесь источников как в этом списке.
-  # Чтобы брать только один набор после merge, переопределите data.sources явным одноэлементным списком.
+  # По умолчанию — один корпус: Yenisei Gov Reports TD (COCO lines). Оверлеи не трогают sources, пока не зададите свой список.
+  # Другой домен (например Digital Peter): переопределите data.sources в отдельном YAML.
   sources:
     - kind: coco_lines
       coco_json: "data/yenisei_gov_reports_td/train.json"
       image_root: "data/yenisei_gov_reports_td/train_images"
       text_field: "transcription"
       cache_namespace: "yenisei"
-    - kind: coco_lines
-      coco_json: "data/digital_peter/annotations_train.json"
-      image_root: "data/digital_peter/images"
-      text_field: "translation"
-      cache_namespace: "digital_peter"
   page_txt_max_chars_default: null
   coco_json: "data/yenisei_gov_reports_td/train.json"
   image_root: "data/yenisei_gov_reports_td/train_images"
@@ -63,16 +58,16 @@ model:
 training:
   # normal | max | low — по умолчанию max: авто main/interop/OMP, prefetch/worker threads auto; для слабой машины: normal
   hardware_utilization: max
-  # ~8 ГБ: batch маленький; на большой VRAM поднимите batch (и optionally data.num_workers) отдельным YAML.
-  # При OOM: configs/oom_safe.yaml или ещё ↓ batch. expandable_segments включается в cli при старте htr-train.
-  batch_size: 8
+  # По умолчанию крупный batch (быстрый темп на большой VRAM); на ~8 ГБ — configs/oom_safe.yaml или явно ↓ batch.
+  # При OOM: уменьшить batch или attention_loss_microbatch (§4.2). expandable_segments включается в cli при старте htr-train.
+  batch_size: 256
   epochs: 5
-  # lr = 0.01 (одна сотая); при нестабильном loss уменьшите.
-  lr: 0.01
+  # lr = 0.05 (в YAML); при нестабильном loss уменьшите.
+  lr: 0.05
   weight_decay: 0.0
   clip_grad_norm: 5.0
   checkpoint_dir: "training/checkpoints"
-  experiment_name: "multi_yenisei_dp"
+  experiment_name: "yenisei_gov_reports_td"
   save_every_epochs: 1
   # false + resume: загрузить веса и продолжить с эпохи completed_epoch+1 (в .pt сохраняется completed_epoch).
   # Уже сохранённые эпохи не считаются заново (цикл только range(start_epoch, epochs+1)). Запись .pt всё так же может

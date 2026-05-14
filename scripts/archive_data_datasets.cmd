@@ -33,16 +33,11 @@ set "WTAR=%SystemRoot%\System32\tar.exe"
 if not exist "!WTAR!" set "WTAR=tar"
 set "ARC=%ROOT%\practice_data_datasets.tar.gz"
 REM bsdtar: -C задаёт базу имён как в bash; без этого и без cd бывают пустые члены архива под Windows.
-for %%N in (
-  digital_peter
-  yenisei_gov_reports_td
-) do (
-  if not exist "!ROOT!\data\%%N" (
-    echo ERROR: folder missing: "!ROOT!\data\%%N" - run scripts\archive_data_datasets.cmd fetch first, then pack.
-    exit /b 1
-  )
+if not exist "!ROOT!\data\yenisei_gov_reports_td" (
+  echo ERROR: folder missing: "!ROOT!\data\yenisei_gov_reports_td" - run scripts\archive_data_datasets.cmd fetch first, then pack.
+  exit /b 1
 )
-"!WTAR!" -czf "!ARC!" -C "!ROOT!" "data\digital_peter" "data\yenisei_gov_reports_td"
+"!WTAR!" -czf "!ARC!" -C "!ROOT!" "data\yenisei_gov_reports_td"
 set "TA=!errorlevel!"
 if not "!TA!"=="0" (
   echo Tar pack failed ^(exit !TA!^).
@@ -110,13 +105,13 @@ if not "!_T!"=="0" (
   exit /b 1
 )
 
-REM Two datasets may be at tarball root OR inside one wrapper folder.
+REM yenisei_gov_reports_td at tarball root OR inside one wrapper folder (older bundles may ship extra dirs).
 set "TMP_UNPACK=!TMPD!"
 set "DATAROOT="
-for /f "delims=" %%B in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $tmp = $Env:TMP_UNPACK; if (-not $tmp) { exit 2 }; $names = @('digital_peter','yenisei_gov_reports_td'); function T([string]$r) { foreach ($x in $names) { if (-not (Test-Path (Join-Path $r $x) -PathType Container)) { return $false } }; return $true }; if (T $tmp) { [Console]::WriteLine($tmp); exit 0 }; foreach ($di in @(Get-ChildItem -LiteralPath $tmp -Directory -ErrorAction SilentlyContinue)) { if (T $di.FullName) { [Console]::WriteLine($di.FullName); exit 0 } }; exit 3 }"') do set "DATAROOT=%%B"
+for /f "delims=" %%B in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $tmp = $Env:TMP_UNPACK; if (-not $tmp) { exit 2 }; $y = Join-Path $tmp 'yenisei_gov_reports_td'; if (Test-Path -LiteralPath $y -PathType Container) { [Console]::WriteLine($tmp); exit 0 }; foreach ($di in @(Get-ChildItem -LiteralPath $tmp -Directory -ErrorAction SilentlyContinue)) { $yy = Join-Path $di.FullName 'yenisei_gov_reports_td'; if (Test-Path -LiteralPath $yy -PathType Container) { [Console]::WriteLine($di.FullName); exit 0 } }; exit 3 }"') do set "DATAROOT=%%B"
 set "TMP_UNPACK="
 if not defined DATAROOT (
-  echo ERROR: tarball has no folder that contains digital_peter + yenisei_gov_reports_td
+  echo ERROR: tarball has no yenisei_gov_reports_td folder at root or under a single subdirectory
   echo Listing top level of temp:
   dir /b /ad "!TMPD!"
   rd /s /q "!TMPD!" 2>nul
@@ -125,7 +120,7 @@ if not defined DATAROOT (
 
 mkdir "%ROOT%\data" 2>nul
 
-for %%D in (digital_peter yenisei_gov_reports_td) do (
+for %%D in (yenisei_gov_reports_td) do (
   if not exist "!DATAROOT!\%%D" (
     echo ERROR: missing folder !DATAROOT!\%%D after layout detect
     rd /s /q "!TMPD!" 2>nul
@@ -154,6 +149,6 @@ exit /b 2
 
 :Usage
 echo Использование: %~nx0 [pack ^| fetch ^| download]
-echo   fetch/download — скачать archive.tar.gz и две папки в data\digital_peter и data\yenisei_gov_reports_td
+echo   fetch/download — скачать archive.tar.gz и папку data\yenisei_gov_reports_td (в архиве допускаются лишние каталоги)
 echo   pack           — упаковать data\ в practice_data_datasets.tar.gz ^(тяжёлое^)
 exit /b 2

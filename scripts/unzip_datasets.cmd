@@ -15,8 +15,6 @@ if not exist "!D!" (
 )
 
 set ZCOUNT=0
-call :UnzipOne "%D%\digital_peter\images.zip" "%D%\digital_peter"
-if errorlevel 1 exit /b 1
 call :UnzipOne "%D%\yenisei_gov_reports_td\test_images.zip" "%D%\yenisei_gov_reports_td"
 if errorlevel 1 exit /b 1
 call :UnzipOne "%D%\yenisei_gov_reports_td\train_images.zip" "%D%\yenisei_gov_reports_td"
@@ -27,15 +25,14 @@ if "!ZCOUNT!"=="0" (
   echo   "!D!"
   echo You only have unpacked folders — or fetch did not finish. Run:
   echo   .\scripts\archive_data_datasets.cmd fetch
-  echo Expected files include: "!D!\digital_peter\images.zip" ...
+  echo Expected files include: "!D!\yenisei_gov_reports_td\train_images.zip" ...
   exit /b 1
 )
-if !ZCOUNT! LSS 3 (
-  echo WARNING: found only !ZCOUNT! of 3 zip archives ok; some datasets may still be unpacked.
+if !ZCOUNT! LSS 2 (
+  echo WARNING: found only !ZCOUNT! of 2 zip archives ok; some datasets may still be unpacked.
 )
 
-if exist "!D!\digital_peter\__MACOSX" rd /s /q "!D!\digital_peter\__MACOSX"
-echo Done. Check data\digital_peter\images and other folders under data\
+echo Done. Check data\yenisei_gov_reports_td\train_images and test_images
 exit /b 0
 
 :UnzipOne

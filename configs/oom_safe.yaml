@@ -3,7 +3,7 @@
 
 training:
   batch_size: 4
-  lr: 0.01
+  lr: 0.05
   cuda_line_resize_on_device: false
   cuda_jpeg_decode_batched: false
   val_max_batches: 8

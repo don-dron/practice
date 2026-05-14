@@ -7,7 +7,7 @@
 
 training:
   batch_size: 8
-  lr: 0.01
+  lr: 0.05
   hardware_utilization: normal
   main_torch_threads: 2
   cuda_line_resize_on_device: false

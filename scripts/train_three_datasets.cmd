@@ -1,5 +1,5 @@
 @echo off
-REM Historical name: default.yaml merges two COCO corpuses (Yenisei + Digital Peter).
+REM Historical name: default.yaml trains on Yenisei Gov Reports TD only.
 setlocal
 set ROOT=%~dp0..
 set PYTHONPATH=%ROOT%\src;%PYTHONPATH%

@@ -39,11 +39,11 @@ python -c "import torch; print('CUDA:', torch.cuda.is_available()); print(torch.
 pip install -e .
 
 
-Данные Yenisei: `data\yenisei_gov_reports_td\train.json` и папка `data\yenisei_gov_reports_td\train_images\` (после `./scripts/archive_data_datasets.* fetch` и `./scripts/unzip_datasets.*` — см. README). Digital Peter остаётся в `data\digital_peter\` для ручной подмены путей в YAML.
+Данные по умолчанию: только Yenisei (`train.json`, `train_images`). Профиль с другими гиперпараметрами или путями — через второй YAML в `configs/baselines/` (пути внутри файла проверьте перед запуском).
 
 
-4) Обучение E1 Digital Peter на CUDA
--------------------------------------
+4) Обучение с профилем §4.1 (YAML с именем Digital Peter — чаще второй файл в цепочке)
+------------------------------------------------------------------------------------
 
 Вариант A — если команда htr-train появилась после pip install (предпочтительно):
 
@@ -61,9 +61,9 @@ python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sy
 Чекпоинты по умолчанию: training\checkpoints\latest.pt
 
 
-5) Обучение на двух корпусах по умолчанию (Yenisei + Digital Peter)
+5) Обучение на одном корпусе по умолчанию (Yenisei Gov Reports TD)
 ------------------------------------------------------------------
-Конфиг ``configs/default.yaml`` задаёт ``data.sources`` как два набора формата COCO-lines.
+Конфиг ``configs/default.yaml`` задаёт ``data.sources`` одним набором COCO-lines (Yenisei).
 
 Linux/macOS (из корня репозитория):
 
@@ -78,11 +78,11 @@ scripts\train_three_datasets.cmd
 htr-train --config configs\default.yaml
 
 
-6) Второй YAML (§4,x) задаёт архитектуру и параметры обучения; два корпуса из ``default.yaml`` сохраняются, пока оверлей не задаёт свой ``data.sources`` целиком
+6) Второй YAML (§4,x) задаёт архитектуру и параметры обучения; ``data.sources`` из ``default.yaml`` сохраняются, пока оверлей не задаёт ``data.sources`` / ``coco_json`` целиком
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda
 
-Чтобы обучаться только на одном наборе: в промежуточном YAML переопределите ``data.sources`` одноэлементным списком.
+Чтобы обучаться на другом датасете: в YAML задайте ``data.sources`` или ``coco_json`` + ``image_root`` явно.
 
 7) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
 ==================================================================
@@ -137,7 +137,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 scripts\train_registry_all.cmd --device cuda
 
-Каждый прогон начинается с ``configs\default.yaml``: список ``data.sources`` (два набора по умолчанию) сохраняется на всех связках, пока вы сами не зададите свой ``data.sources`` в отдельном YAML.
+Каждый прогон начинается с ``configs\default.yaml``: список ``data.sources`` (Yenisei по умолчанию) сохраняется на всех связках, пока оверлей не переопределит источники.
 
 По умолчанию при пустых аргументах подставляется `--device cuda`.
 

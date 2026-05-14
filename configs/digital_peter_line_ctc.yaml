@@ -28,7 +28,7 @@ model:
 training:
   batch_size: 1728
   epochs: 5
-  lr: 0.01
+  lr: 0.05
   experiment_name: "dpeter_crnn_ctc"
   checkpoint_dir: "training/checkpoints"
 

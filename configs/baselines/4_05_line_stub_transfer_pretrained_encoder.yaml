@@ -36,6 +36,6 @@ training:
   objective: ctc
   batch_size: 396
   epochs: 5
-  lr: 0.01
+  lr: 0.05
   experiment_name: "pretrained_backbone_section45"
   checkpoint_dir: "training/checkpoints"

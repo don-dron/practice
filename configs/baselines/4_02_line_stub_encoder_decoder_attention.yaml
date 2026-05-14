@@ -39,6 +39,6 @@ training:
   attention_loss_microbatch: 3
   batch_size: 6
   epochs: 5
-  lr: 0.01
+  lr: 0.05
   experiment_name: "line_attention_section42"
   checkpoint_dir: "training/checkpoints"

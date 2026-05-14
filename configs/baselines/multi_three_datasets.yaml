@@ -1,8 +1,7 @@
-# Алиас методологии: то же объединение двух COCO-корпусов, что в configs/default.yaml (data.sources).
-# Имя файла историческое (раньше был третий источник page_txt_pairs). Дополнительный YAML не обязателен:
-#   htr-train --config configs/default.yaml
+# Алиас методологии: один COCO-корпус Yenisei, как в configs/default.yaml (data.sources).
+# Имя файла историческое. Дополнительный YAML не обязателен: htr-train --config configs/default.yaml
 
 methodology_profile:
   report_section: "multi"
-  short_name: yenisei_peter_coco_lines
+  short_name: yenisei_coco_lines_default
   status: trainable

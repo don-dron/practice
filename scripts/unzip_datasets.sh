@@ -16,10 +16,7 @@ unzip_to() {
 	unzip -oq "$zipfile" -d "$dest_parent"
 }
 
-unzip_to "$DATA/digital_peter/images.zip" "$DATA/digital_peter"
 unzip_to "$DATA/yenisei_gov_reports_td/test_images.zip" "$DATA/yenisei_gov_reports_td"
 unzip_to "$DATA/yenisei_gov_reports_td/train_images.zip" "$DATA/yenisei_gov_reports_td"
 
-rm -rf "$DATA/digital_peter/__MACOSX"
-
-echo "Готово. Пути: data/digital_peter/images, yenisei_*/{test_,train_}images."
+echo "Готово. Пути: data/yenisei_gov_reports_td/{test_,train_}images."
