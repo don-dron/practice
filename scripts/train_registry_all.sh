@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 # Последовательно обучает все связки регистра §5.1 (T0, E1, E1*, E2, S2–S5).
-# Все шаги используют data.sources из configs/default.yaml (Yenisei по умолчанию), если второй YAML не переопределяет sources целиком.
-# Запуск из корня репозитория: ./scripts/train_registry_all.sh [--epochs N] [--batch-size N] [--device cuda|cpu|mps]
+# Все шаги: configs/default.yaml + baseline YAML при необходимости (слияние в CLI).
 #
-# По умолчанию эпохи и batch из YAML.
+# Из корня: ./scripts/train_registry_all.sh [--epochs N] [--batch-size N] [--device cuda|cpu|mps]
 # Из окружения: TRAIN_REGISTRY_DEVICE, TRAIN_REGISTRY_EPOCHS, TRAIN_REGISTRY_BATCH
-# Полный YAML-бюджет (долго): ./scripts/train_registry_all.sh --device cuda
-# Быстрый дым: TRAIN_REGISTRY_EPOCHS=1 ./scripts/train_registry_all.sh --device cpu --batch-size 4
-#
-# После каждого прогона копируется training/checkpoints/latest.pt в
-# training/registry_snapshots/<метка>_latest.pt
 
 set -euo pipefail
 
@@ -38,8 +32,6 @@ train_main()
   cp -f "$REPO/training/checkpoints/latest.pt" "$dest"
   echo "snapshot: $dest"
 }
-
-
 
 ENV_ARGS=()
 [[ -n "${TRAIN_REGISTRY_DEVICE:-}" ]] && ENV_ARGS+=( --device "${TRAIN_REGISTRY_DEVICE}" )

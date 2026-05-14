@@ -1,15 +1,19 @@
-# Google Colab (часто 12–16 ГБ VRAM или лимиты): смешение с уже «8ГБ-ориентированным» default.yaml.
+# Google Colab (часто 12–16 ГБ VRAM): поверх уже «узкого» default.yaml — больший batch и cuDNN+AMP.
 #
-#   htr-train --config configs/default.yaml --config configs/colab.yaml
+#   htr-train -c configs/default.yaml -c configs/colab.yaml
 #
-# При OOM добавьте третий: --config configs/oom_safe.yaml
-# Дополнительно: данные в /content/... Для большего числа воркеров: export HTR_COLAB_NUM_WORKERS=4.
+# Если снова OOM — уменьшите batch_size или добавьте training.cudnn_enabled: false только в локальном оверлее.
 
 training:
   batch_size: 8
   lr: 0.05
   hardware_utilization: normal
   main_torch_threads: 2
+  cudnn_enabled: true
+  cudnn_benchmark: false
+  amp: true
+  cuda_empty_cache_after_backward: false
+  cuda_empty_cache_after_optimizer_step: false
   cuda_line_resize_on_device: false
 
 data:
