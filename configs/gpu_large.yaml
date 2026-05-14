@@ -1,0 +1,12 @@
+# Большая VRAM (~24 ГБ+, сервер/A100 и т.д.):
+#   htr-train --config configs/default.yaml --config configs/gpu_large.yaml
+# Подстраивайте batch_size под вашу карту (и при необходимости data.num_workers).
+
+training:
+  batch_size: 128
+  cuda_line_resize_on_device: true
+  val_max_batches: 120
+data:
+  num_workers: 4
+  preprocessed_ram_cache_max_gb: 2
+  max_width: 1200

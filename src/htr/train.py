@@ -960,6 +960,9 @@ def run_training(cfg: dict) -> None:
     if start_epoch > epochs:
         return
 
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     model = _maybe_torch_compile(model, tc, device)
 
     freeze_ep = _freeze_backbone_epochs(cfg)

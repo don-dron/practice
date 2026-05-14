@@ -1,13 +1,13 @@
-# Сильное урезание VRAM (второй конфиг поверх default):
-#   PYTORCH_ALLOC_CONF=expandable_segments:True \
-#     htr-train --config configs/default.yaml --config configs/oom_safe.yaml
+# Если при batch 8 (default для 8 ГБ) всё ещё OOM:
+#   htr-train --config configs/default.yaml --config configs/oom_safe.yaml
 
 training:
-  batch_size: 64
+  batch_size: 4
   lr: 0.01
-  # линия остаётся float на CPU до move на device — меньше памяти GPU в collate
   cuda_line_resize_on_device: false
-  val_max_batches: 32
+  cuda_jpeg_decode_batched: false
+  val_max_batches: 8
 
 data:
   num_workers: 0
+  preprocessed_ram_cache_max_gb: 0

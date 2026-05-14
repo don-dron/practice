@@ -8,6 +8,14 @@ from htr.config import config_paths_from_args, deep_merge, load_yaml
 
 def train_main() -> None:
     import multiprocessing as mp
+    import os
+
+    # До импорта PyTorch: на 8 ГБ распространены OOM из-за фрагментации (см. лог expandable_segments).
+    if not (
+        os.environ.get("PYTORCH_ALLOC_CONF", "").strip()
+        or os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "").strip()
+    ):
+        os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 
     try:
         mp.set_start_method("spawn")

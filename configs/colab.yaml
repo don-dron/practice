@@ -1,15 +1,17 @@
-# Google Colab: ещё жёстче, чем default (batch 256). Иначе достаточно только configs/default.yaml.
+# Google Colab (часто 12–16 ГБ VRAM или лимиты): смешение с уже «8ГБ-ориентированным» default.yaml.
 #
 #   htr-train --config configs/default.yaml --config configs/colab.yaml
 #
-# Дополнительно: данные в /content/... (не Google Drive), пока кэш не заполнен — первая эпоха дольше.
-# Воркеры: export HTR_COLAB_NUM_WORKERS=6 (или 8), если хватает RAM.
+# При OOM добавьте третий: --config configs/oom_safe.yaml
+# Дополнительно: данные в /content/... Для большего числа воркеров: export HTR_COLAB_NUM_WORKERS=4.
 
 training:
-  batch_size: 128
+  batch_size: 8
   lr: 0.01
   hardware_utilization: normal
   main_torch_threads: 2
+  cuda_line_resize_on_device: false
 
 data:
-  preprocessed_ram_cache_max_gb: 3
+  num_workers: 0
+  preprocessed_ram_cache_max_gb: 0
