@@ -1056,6 +1056,23 @@ def run_training(cfg: dict) -> None:
     if freeze_ep > 0:
         _set_pretrained_backbone_frozen(model, True)
 
+    try:
+        _ga_raw = tc.get("gradient_accumulation_steps", 1)
+        gradient_accum_steps = max(1, int(_ga_raw))
+    except (TypeError, ValueError):
+        gradient_accum_steps = 1
+    if objective == "attention_ce" and gradient_accum_steps > 1:
+        print(
+            "[htr-train] gradient_accumulation_steps>1 не используется для attention_ce "
+            "(оставляем пошагово как было)."
+        )
+
+    if gradient_accum_steps > 1 and objective != "attention_ce":
+        print(
+            f"[htr-train] CTC: gradient_accumulation_steps={gradient_accum_steps} "
+            f"(меньше пик VRAM на батч; optimizer.step каждые {gradient_accum_steps} forward)"
+        )
+
     optim_ = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     amp_cfg = bool(cfg["training"].get("amp", False))
     scaler = _make_grad_scaler(enabled=(amp_cfg and device.type == "cuda"))
@@ -1067,7 +1084,11 @@ def run_training(cfg: dict) -> None:
         model.train()
         total_loss = 0.0
         nb_tr = 0
+        ctc_accum_count = 0
+        if objective != "attention_ce" and gradient_accum_steps > 1:
+            optim_.zero_grad(set_to_none=True)
         train_bar = tqdm(train_loop_outer, desc=f"epoch {epoch}/{epochs}", leave=False)
+        use_amp = False
         for batch in train_bar:
             b_t = move_training_image_batch(
                 batch,
@@ -1078,10 +1099,10 @@ def run_training(cfg: dict) -> None:
             images = b_t["image"]  # type: ignore[arg-type]
             texts_batch: list[str] = b_t["text"]  # type: ignore[list-item]
 
-            optim_.zero_grad(set_to_none=True)
             use_amp = scaler.is_enabled()
 
             if objective == "attention_ce":
+                optim_.zero_grad(set_to_none=True)
                 if not isinstance(model, AttentionLineSeq2Seq):
                     raise TypeError("objective attention_ce требует model.name attention_line_seq2seq")
                 tin_y, targ_y, m_ok = _prepare_attention_batches(model, charset, texts_batch, device, decoder_cap)
@@ -1106,33 +1127,84 @@ def run_training(cfg: dict) -> None:
             else:
                 assert criterion is not None
                 targets_tl, tgt_lengths = _pack_targets(texts_batch, charset, device)
-                if use_amp:
-                    with _autocast_cuda():
-                        log_probs = model(images)
-                        inp_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
-                        batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
-                    scaler.scale(batch_loss).backward()
-                    clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
-                    if clip_val > 0:
-                        scaler.unscale_(optim_)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
-                    scaler.step(optim_)
-                    scaler.update()
-                else:
-                    log_probs = model(images)
-                    inp_len = torch.full((images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device)
-                    batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
-                    batch_loss.backward()
-                    clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
-                    if clip_val > 0:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
-                    optim_.step()
+                clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
+                acc = max(1, gradient_accum_steps)
 
-                loss = batch_loss
+                if acc == 1:
+                    optim_.zero_grad(set_to_none=True)
+                    if use_amp:
+                        with _autocast_cuda():
+                            log_probs = model(images)
+                            inp_len = torch.full(
+                                (images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device
+                            )
+                            batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
+                        scaler.scale(batch_loss).backward()
+                        if clip_val > 0:
+                            scaler.unscale_(optim_)
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                        scaler.step(optim_)
+                        scaler.update()
+                    else:
+                        log_probs = model(images)
+                        inp_len = torch.full(
+                            (images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device
+                        )
+                        batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
+                        batch_loss.backward()
+                        if clip_val > 0:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                        optim_.step()
+                    loss = batch_loss
+                else:
+                    if use_amp:
+                        with _autocast_cuda():
+                            log_probs = model(images)
+                            inp_len = torch.full(
+                                (images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device
+                            )
+                            batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
+                        scaler.scale(batch_loss / float(acc)).backward()
+                    else:
+                        log_probs = model(images)
+                        inp_len = torch.full(
+                            (images.shape[0],), log_probs.shape[0], dtype=torch.long, device=device
+                        )
+                        batch_loss = criterion(log_probs, targets_tl, inp_len, tgt_lengths)
+                        (batch_loss / float(acc)).backward()
+                    loss = batch_loss
+                    ctc_accum_count += 1
+                    if ctc_accum_count >= acc:
+                        if use_amp:
+                            scaler.unscale_(optim_)
+                            if clip_val > 0:
+                                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                            scaler.step(optim_)
+                            scaler.update()
+                        else:
+                            if clip_val > 0:
+                                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                            optim_.step()
+                        optim_.zero_grad(set_to_none=True)
+                        ctc_accum_count = 0
 
             total_loss += float(loss.item())
             nb_tr += 1
             train_bar.set_postfix(loss=loss.item())
+
+        if objective != "attention_ce" and gradient_accum_steps > 1 and ctc_accum_count > 0:
+            clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
+            if use_amp:
+                scaler.unscale_(optim_)
+                if clip_val > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                scaler.step(optim_)
+                scaler.update()
+            else:
+                if clip_val > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                optim_.step()
+            optim_.zero_grad(set_to_none=True)
 
         mean_train = total_loss / max(1, nb_tr)
         cer_sum = 0.0
