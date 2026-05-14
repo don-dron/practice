@@ -3,6 +3,7 @@
 # Рекомендуемая цепочка: default.yaml → этот файл → профиль методологии configs/baselines/4_xx_*.yaml .
 
 data:
+  sources: null
   max_width: 900
   val_fraction: 0.03
   num_workers: 12

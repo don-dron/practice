@@ -25,9 +25,14 @@ def _lines_tensor_cache_key(
     img_height: int,
     max_width: Optional[int],
     min_crop_width: int,
+    cache_namespace: str = "",
 ) -> str:
     fn = fname.replace("\\", "/")
-    payload = repr((fn, bbox, img_height, max_width, min_crop_width)).encode("utf-8")
+    if cache_namespace:
+        tup = (cache_namespace, fn, bbox, img_height, max_width, min_crop_width)
+    else:
+        tup = (fn, bbox, img_height, max_width, min_crop_width)
+    payload = repr(tup).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -135,6 +140,7 @@ class COCOLinesDataset(Dataset):
         train_augmentation: Optional[TrainAugmentation] = None,
         preprocessed_cache_dir: Optional[Union[str, Path]] = None,
         preprocessed_ram_cache_max_bytes: Optional[int] = None,
+        cache_namespace: str = "",
     ):
         self.image_root = Path(image_root)
         self.text_field = text_field
@@ -142,6 +148,7 @@ class COCOLinesDataset(Dataset):
         self.max_width = max_width
         self.min_crop_width = min_crop_width
         self.train_augment = train_augmentation
+        self._cache_namespace = (cache_namespace or "").strip()
         rc = preprocessed_cache_dir
         self.preprocessed_cache_root: Optional[Path] = None
         if rc is not None:
@@ -280,7 +287,11 @@ class COCOLinesDataset(Dataset):
         use_key = ram is not None or cache_root is not None
 
         key_hex = (
-            _lines_tensor_cache_key(fname, bbox, self.img_height, self.max_width, self.min_crop_width) if use_key else ""
+            _lines_tensor_cache_key(
+                fname, bbox, self.img_height, self.max_width, self.min_crop_width, self._cache_namespace
+            )
+            if use_key
+            else ""
         )
 
         def _tensor_item(tens: torch.Tensor, out_w: int) -> Dict[str, Union[torch.Tensor, str]]:

@@ -39,7 +39,7 @@ python -c "import torch; print('CUDA:', torch.cuda.is_available()); print(torch.
 pip install -e .
 
 
-Данные Digital Peter должны быть на месте: data\digital_peter\annotations_train.json и папка data\digital_peter\images\ (разархивация через README / скрипты).
+Данные Yenisei: `data\yenisei_gov_reports_td\train.json` и папка `data\yenisei_gov_reports_td\train_images\` (после `./scripts/archive_data_datasets.* fetch` и `./scripts/unzip_datasets.*` — см. README). Digital Peter остаётся в `data\digital_peter\` для ручной подмены путей в YAML.
 
 
 4) Обучение E1 Digital Peter на CUDA
@@ -61,12 +61,29 @@ python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sy
 Чекпоинты по умолчанию: training\checkpoints\latest.pt
 
 
-5) Сравнение с базой T0 (§5.1.2 — один default: без второго профиля)
----------------------------------------------------------------------
-htr-train --config configs\default.yaml --device cuda
+5) Обучение на трёх корпусах по умолчанию (Yenisei + Digital Peter + ROO страницы)
+---------------------------------------------------------------------------------
+Конфиг ``configs/default.yaml`` уже задаёт ``data.sources`` из трёх наборов. ROO нужны распакованные пары страница/текст; если их нет, источник с ``optional: true`` пропускается.
+
+Linux/macOS (из корня репозитория):
+
+bash scripts/train_three_datasets.sh
+
+Windows (из корня, после pip install):
+
+scripts\train_three_datasets.cmd
+
+Или напрямую:
+
+htr-train --config configs\default.yaml
 
 
-6) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
+6) Сравнение с прежней «одной связкой»: второй YAML сбрасывает multi-режим (data.sources: null)
+----------------------------------------------------------------------------------------------
+htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda
+
+
+7) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
 ==================================================================
 Ниже — те же связки, что в п. 5.1.2 и блоке команд там; при желании добавьте
 единые параметры в конец каждой строки при необходимости:  --epochs 60 --device cuda  (пропускная способность: цель быстрее кормить GPU — в ``default.yaml`` больше ``num_workers``/``batch``, DataLoader с ``persistent_workers`` и ``prefetch_factor``, AMP и TF32; при полной занятости GPU низкая средняя загрузка CPU нормальна; без потолка воркеров на Win: ``set HTR_WIN_MAX_NUM_WORKERS=0``; при OOM уменьшить ``batch_size``).
@@ -90,7 +107,7 @@ htr-train --config configs\default.yaml --config configs\baselines\4_04_page_stu
 htr-train --config configs\default.yaml --config configs\baselines\4_05_line_stub_transfer_pretrained_encoder.yaml
 
 
-7) Инференс по сохранённой модели (пример)
+8) Инференс по сохранённой модели (пример)
 --------------------------------------------
 Подставьте путь к кропу строки:
 
@@ -102,7 +119,7 @@ set PYTHONPATH=%CD%\src
 python -c "import sys; from htr.cli import infer_main; sys.argv=['htr-infer']+sys.argv[1:]; infer_main()" --checkpoint training\checkpoints\latest.pt --device cuda путь\к\строке.png
 
 
-8) PowerShell (альтернатива активации venv)
+9) PowerShell (альтернатива активации venv)
 -------------------------------------------
 cd путь\к\practice
 py -3.11 -m venv .venv
@@ -112,7 +129,7 @@ py -3.11 -m venv .venv
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 
-9) Все связки регистра §5.1 подряд (T0, E1, E1*, E2, S2–S5) на CUDA
+10) Все связки регистра §5.1 подряд (T0, E1, E1*, E2, S2–S5) на CUDA
 ---------------------------------------------------------------------
 Из корня репозитория в cmd.exe (venv можно не активировать — скрипт возьмёт `.venv\Scripts\python.exe`, при отсутствии попытается создать `.venv`):
 

@@ -31,8 +31,13 @@ class AdditiveAttention(nn.Module):
         mw = t_src
         ar = torch.arange(mw, device=scores.device).unsqueeze(0).expand(b, -1)
         lng = time_lengths.unsqueeze(1).clamp(min=1, max=mw)
-        # -1e9 переполняет float16 в AMP; брать предел типа softmax-инпутов.
-        scores = scores.masked_fill(ar >= lng, torch.finfo(scores.dtype).min)
+        # Не использовать -1e9: в AMP (float16) скаляр переполняет Half при masked_fill.
+        neg = torch.tensor(
+            torch.finfo(scores.dtype).min,
+            device=scores.device,
+            dtype=scores.dtype,
+        )
+        scores = scores.masked_fill(ar >= lng, neg)
         attn_w = torch.softmax(scores, dim=-1)
         ctx = torch.bmm(attn_w.unsqueeze(1), encoder_outputs.transpose(0, 1)).squeeze(1)
         return ctx, attn_w

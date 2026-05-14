@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import os
 import sys
+from typing import Optional
 
 import torch
 from torch import nn
 import torch.optim as optim
+from torch.utils.data import ConcatDataset
 from tqdm import tqdm
 
 from htr.charset import Charset, charset_from_strings
 from htr.data.coco_lines import COCOLinesDataset, coco_collate_fn
-from htr.data.split import Subset, random_split_indices, texts_for_charset_from_coco
+from htr.data.page_txt_pairs import PageTxtPairsDataset
+from htr.data.split import Subset, random_split_indices
 from htr.device import move_batch_to_device, pick_device
 from htr.eval.metrics import lev_ratio
 from htr.io.checkpoint import save_checkpoint
@@ -187,6 +191,91 @@ def _preprocessed_ram_budget(dc: dict, nw: int) -> tuple[int, float]:
     return max(int(total / denom), 1024), gb
 
 
+def _training_source_entries(dc: dict) -> list[dict]:
+    raw = dc.get("sources")
+
+    def _parse_one(it: dict, idx: int) -> dict:
+        if not isinstance(it, dict):
+            raise TypeError(f"data.sources[{idx}] должен быть объектом YAML")
+        k = str(it.get("kind") or "").strip().lower()
+        if not k:
+            if it.get("coco_json") and it.get("image_root"):
+                k = "coco_lines"
+            elif it.get("pair_root"):
+                k = "page_txt_pairs"
+            else:
+                raise ValueError(
+                    f"data.sources[{idx}]: укажите kind или (coco_json+image_root) или pair_root для page_txt_pairs"
+                )
+        ns = str(it.get("cache_namespace", "") or "").strip()
+        if k == "coco_lines":
+            cj, ir = it.get("coco_json"), it.get("image_root")
+            if not cj or not ir:
+                raise ValueError(f"data.sources[{idx}] (coco_lines): нужны coco_json и image_root")
+            tf = it.get("text_field") or dc.get("text_field", "translation")
+            return {"kind": "coco_lines", "coco_json": cj, "image_root": ir, "text_field": tf, "cache_namespace": ns}
+        if k == "page_txt_pairs":
+            pr = it.get("pair_root")
+            if not pr:
+                raise ValueError(f"data.sources[{idx}] (page_txt_pairs): нужен pair_root")
+            mt_raw = it.get("max_text_chars")
+            if mt_raw is None:
+                mt_raw = dc.get("page_txt_max_chars_default")
+            mt: Optional[int] = None if mt_raw is None else int(mt_raw)
+            return {
+                "kind": "page_txt_pairs",
+                "pair_root": pr,
+                "cache_namespace": ns,
+                "max_text_chars": mt,
+                "optional": bool(it.get("optional", False)),
+            }
+        raise ValueError(f"Неизвестный data.sources[{idx}].kind={k!r} (coco_lines | page_txt_pairs)")
+
+    if isinstance(raw, list):
+        if len(raw) > 0:
+            return [_parse_one(raw[i], i) for i in range(len(raw))]
+    elif raw is not None:
+        raise TypeError("data.sources должен быть списком объектов YAML или опущен (legacy coco_json)")
+    cj, ir = dc.get("coco_json"), dc.get("image_root")
+    if not cj or not ir:
+        raise ValueError("В data задайте coco_json + image_root или непустой список data.sources[]")
+    return [
+        {
+            "kind": "coco_lines",
+            "coco_json": cj,
+            "image_root": ir,
+            "text_field": dc.get("text_field", "translation"),
+            "cache_namespace": "",
+        }
+    ]
+
+
+def _disk_cache_slug(entry: dict) -> str:
+    if entry.get("kind") == "page_txt_pairs":
+        return hashlib.sha256(str(entry["pair_root"]).encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(str(entry["coco_json"]).encode("utf-8")).hexdigest()[:12]
+
+
+def _disk_cache_root_for_source(dc: dict, entry: dict, n_sources: int) -> Optional[str]:
+    raw = dc.get("preprocessed_cache_dir")
+    if raw is None or not str(raw).strip():
+        return None
+    base = Path(str(raw).strip()).expanduser().resolve()
+    ns = str(entry.get("cache_namespace", "") or "").strip()
+    slug = _disk_cache_slug(entry)
+    if n_sources <= 1:
+        return str(base / ns) if ns else str(base)
+    return str(base / (ns or slug))
+
+
+def _datasets_with_augment_backend(ds: torch.utils.data.Dataset) -> list[torch.utils.data.Dataset]:
+    if isinstance(ds, ConcatDataset):
+        return [x for x in ds.datasets if hasattr(x, "train_augment")]
+    if hasattr(ds, "train_augment"):
+        return [ds]
+    return []
+
+
 def run_training(cfg: dict) -> None:
     objective = _training_objective(cfg)
     decoder_cap = _decoder_max_steps(cfg)
@@ -198,38 +287,102 @@ def run_training(cfg: dict) -> None:
     ram_budget_b, ram_gb_yaml = _preprocessed_ram_budget(dc, nw)
 
     train_aug = TrainAugmentation() if bool(dc.get("augmentation_train", False)) else None
-    full_ds = COCOLinesDataset(
-        coco_json=dc["coco_json"],
-        image_root=dc["image_root"],
-        text_field=dc.get("text_field", "translation"),
-        img_height=int(dc["img_height"]),
-        max_width=dc.get("max_width"),
-        min_crop_width=int(dc.get("min_crop_width", 4)),
-        train_augmentation=train_aug,
-        preprocessed_cache_dir=dc.get("preprocessed_cache_dir"),
-        preprocessed_ram_cache_max_bytes=(ram_budget_b if ram_budget_b > 0 else None),
-    )
-    if full_ds.preprocessed_cache_root is not None:
-        print(f"[htr-train] preprocessed_cache_dir={full_ds.preprocessed_cache_root!s}")
+
+    entries = _training_source_entries(dc)
+    n_src = len(entries)
+    ram_per_source = max(1024, ram_budget_b // max(1, n_src)) if ram_budget_b > 0 else 0
+
+    parts: list[torch.utils.data.Dataset] = []
+    kinds: list[str] = []
+    for ent in entries:
+        cr = _disk_cache_root_for_source(dc, ent, len(entries))
+        k = str(ent["kind"])
+        if k == "coco_lines":
+            kinds.append(k)
+            parts.append(
+                COCOLinesDataset(
+                    coco_json=ent["coco_json"],
+                    image_root=ent["image_root"],
+                    text_field=str(ent["text_field"]),
+                    img_height=int(dc["img_height"]),
+                    max_width=dc.get("max_width"),
+                    min_crop_width=int(dc.get("min_crop_width", 4)),
+                    train_augmentation=train_aug,
+                    preprocessed_cache_dir=cr,
+                    preprocessed_ram_cache_max_bytes=(ram_per_source if ram_budget_b > 0 else None),
+                    cache_namespace=str(ent.get("cache_namespace", "") or ""),
+                )
+            )
+        elif k == "page_txt_pairs":
+            opt = bool(ent.get("optional", False))
+            try:
+                parts.append(
+                    PageTxtPairsDataset(
+                        ent["pair_root"],
+                        img_height=int(dc["img_height"]),
+                        max_width=dc.get("max_width"),
+                        train_augmentation=train_aug,
+                        preprocessed_cache_dir=cr,
+                        preprocessed_ram_cache_max_bytes=(ram_per_source if ram_budget_b > 0 else None),
+                        cache_namespace=str(ent.get("cache_namespace", "") or ""),
+                        max_text_chars=ent.get("max_text_chars"),
+                    )
+                )
+                kinds.append(k)
+            except FileNotFoundError as ex:
+                if opt:
+                    print(f"[htr-train] optional источник page_txt_pairs пропускается: {ex}")
+                    continue
+                raise
+        else:
+            raise RuntimeError(f"внутренняя ошибка: неизвестный kind={k!r}")
+
+    if not parts:
+        raise RuntimeError(
+            "Не загружен ни один источник данных (проверьте пути к COCO/json и парам страницы; "
+            "для ROO см. unzip pages-img-plaintext; источники page_txt_pairs с optional: true можно пропустить)."
+        )
+
+    counts = [len(p) for p in parts]
+    if len(parts) > 1:
+        print(f"[htr-train] данные: {len(parts)} активных источников {kinds}; размеры поднаборов={counts} (итого {sum(counts)})")
+    else:
+        print(f"[htr-train] один источник ({kinds[0]}), размер={counts[0]}")
+
+    full_ds: torch.utils.data.Dataset = parts[0] if len(parts) == 1 else ConcatDataset(parts)
+
+    _printed_cache: set[str] = set()
+    for p in parts:
+        if p.preprocessed_cache_root is not None:
+            rp = str(p.preprocessed_cache_root)
+            if rp not in _printed_cache:
+                _printed_cache.add(rp)
+                print(f"[htr-train] preprocessed_cache_dir={rp}")
     if ram_budget_b > 0:
         split_d = max(1, nw) * (2 if nw > 0 else 1)
         print(
             f"[htr-train] preprocessed_ram_cache_max_gb(total)≈{ram_gb_yaml:g} · "
             f"~{ram_budget_b / (1024**3):.3f} GiB per DataLoader worker "
             f"(split /{split_d}: train + val loaders × num_workers; num_workers={nw})"
+            f"{f'; ~{ram_per_source/(1024**3):.3f} GiB LRU на каждый из {len(entries)} заявленных поднаборов в YAML' if len(entries) > 1 else ''}"
         )
+
     vf = float(dc.get("val_fraction", 0.0))
     train_ix, val_ix = random_split_indices(len(full_ds), vf, seed=seed)
 
-    texts_train = texts_for_charset_from_coco(full_ds.samples, train_ix)
+    texts_train = [full_ds[i]["text"] for i in train_ix]  # type: ignore[index,misc]
+
     extra = cfg.get("charset", {}).get("extra_chars") or ""
     charset = charset_from_strings(texts_train, extra)
 
     train_ds = Subset(full_ds, train_ix)
-    bak = getattr(full_ds, "train_augment", None)
-    full_ds.train_augment = None
+    backends = _datasets_with_augment_backend(full_ds)
+    _bak_aug = [b.train_augment for b in backends]
+    for b in backends:
+        b.train_augment = None
     val_ds = Subset(full_ds, val_ix)
-    full_ds.train_augment = bak
+    for b, ag in zip(backends, _bak_aug):
+        b.train_augment = ag
 
     from torch.utils.data import DataLoader
 

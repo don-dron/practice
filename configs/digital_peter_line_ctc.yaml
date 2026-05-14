@@ -1,4 +1,5 @@
-# Совместимо с более ранними инструкциями; канонический путь — configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml .
+# Ранее — Digital Peter; по умолчанию сейчас Yenisei (train.json + train_images). Для Peter: coco_json/images + text_field translation.
+# Канонический путь к профилю §4.1 — configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml .
 
 methodology_profile:
   report_section: "4.1"
@@ -10,10 +11,11 @@ project:
   device: "cuda"
 
 data:
+  sources: null
   kind: coco_lines
-  coco_json: "data/digital_peter/annotations_train.json"
-  image_root: "data/digital_peter/images"
-  text_field: "translation"
+  coco_json: "data/yenisei_gov_reports_td/train.json"
+  image_root: "data/yenisei_gov_reports_td/train_images"
+  text_field: "transcription"
   img_height: 32
   max_width: 900
   val_fraction: 0.03

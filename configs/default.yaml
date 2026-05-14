@@ -6,9 +6,27 @@ project:
 
 data:
   kind: coco_lines
-  coco_json: "data/digital_peter/annotations_train.json"
-  image_root: "data/digital_peter/images"
-  text_field: "translation"           # ключ внутри annotation["attributes"]
+  # По умолчанию — три корпуса (два COCO-строк + страницы PNG+TXT). Для профилей на одном наборе в оверлее задайте data.sources: null.
+  sources:
+    - kind: coco_lines
+      coco_json: "data/yenisei_gov_reports_td/train.json"
+      image_root: "data/yenisei_gov_reports_td/train_images"
+      text_field: "transcription"
+      cache_namespace: "yenisei"
+    - kind: coco_lines
+      coco_json: "data/digital_peter/annotations_train.json"
+      image_root: "data/digital_peter/images"
+      text_field: "translation"
+      cache_namespace: "digital_peter"
+    - kind: page_txt_pairs
+      pair_root: "data/russian_old_orthography_ocr"
+      cache_namespace: "russian_old_orthography"
+      max_text_chars: 8192
+      optional: true
+  page_txt_max_chars_default: null
+  coco_json: "data/yenisei_gov_reports_td/train.json"
+  image_root: "data/yenisei_gov_reports_td/train_images"
+  text_field: "transcription"           # Yenisei: attributes.transcription; для infer/legacy при отсутствии sources[]
   split_annotation: null               # если null — все аннотации из файла как один сплит
   img_height: 32
   max_width: 1200                       # ограничение по ширине после масштабирования высоты
@@ -41,7 +59,7 @@ training:
   weight_decay: 0.0
   clip_grad_norm: 5.0
   checkpoint_dir: "training/checkpoints"
-  experiment_name: "run"
+  experiment_name: "multi_yenisei_dp_roo"
   save_every_epochs: 1
   amp: true
   cudnn_benchmark: true

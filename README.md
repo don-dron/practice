@@ -27,7 +27,7 @@ scripts\unzip_datasets.cmd
 
 ## Строковый HTR-пайплайн (конфиг, обучение, инференс)
 
-После установки данных пакет `htr` (каталог `src/htr`) даёт связку конфигурации YAML + CRNN со CTC без претрейна как базовый вариант архитектуры из поясняющего отчёта.
+После установки данных пакет `htr` (каталог `src/htr`) даёт связку конфигурации YAML + CRNN со CTC без претрейна как базовый вариант архитектуры из поясняющего отчёта. **По умолчанию конфиги указывают на Yenisei Gov Reports TD** (`data/yenisei_gov_reports_td/train.json`, `.../train_images`, `text_field: transcription`). Для Digital Peter подставьте в YAML пути `data/digital_peter/...` и `text_field: translation`.
 
 ```bash
 python -m pip install -e .
