@@ -326,7 +326,8 @@ def _dataload_worker_count(dc: dict) -> int:
     if sys.platform == "win32":
         _cap_raw = os.environ.get("HTR_WIN_MAX_NUM_WORKERS", "").strip()
         if _cap_raw != "0":
-            _cap = 16
+            # Много воркеров + spawn + крупные батчи часто даёт RuntimeError 1455 (shared file mapping).
+            _cap = 4
             if _cap_raw != "":
                 try:
                     _cap = max(1, min(32, int(_cap_raw)))
@@ -335,7 +336,8 @@ def _dataload_worker_count(dc: dict) -> int:
             if nw > _cap:
                 print(
                     f"[htr-train] num_workers: YAML asked {nw}, capping at {_cap} on Windows "
-                    f"(raise: larger YAML num_workers / set HTR_WIN_MAX_NUM_WORKERS=N; disable cap: =0)"
+                    f"(избегает 1455/shared file mapping; без капа: HTR_WIN_MAX_NUM_WORKERS=0; свой потолок: =N; "
+                    f"или data.num_workers: 0 для стабильности)"
                 )
                 nw = _cap
     return nw
@@ -575,11 +577,15 @@ def run_training(cfg: dict) -> None:
     if worker_init_fn is not None:
         _dl_common["worker_init_fn"] = worker_init_fn
     if nw > 0:
-        _dl_common["persistent_workers"] = True
+        # Windows spawn + shared tensors: persistent_workers усиливает риск ERROR_NO_SYSTEM_RESOURCES (1455).
+        if sys.platform != "win32":
+            _dl_common["persistent_workers"] = True
         try:
             _pf = max(2, min(16, int(dc.get("prefetch_factor", 4))))
         except (TypeError, ValueError):
             _pf = 4
+        if sys.platform == "win32":
+            _pf = min(_pf, 4)
         _dl_common["prefetch_factor"] = _pf
 
     loader_train = DataLoader(train_ds, shuffle=True, batch_size=bs, **_dl_common)
@@ -595,9 +601,10 @@ def run_training(cfg: dict) -> None:
     device = torch.device(resolved)
 
     if nw > 0:
+        _persist = sys.platform != "win32"
         print(
             f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
-            f"persistent_workers=true dataloader_worker_torch_threads="
+            f"persistent_workers={_persist} dataloader_worker_torch_threads="
             f"{wt_threads if wt_threads > 0 else 'off'}"
         )
         if device.type == "cuda" and worker_init_fn is not None:
