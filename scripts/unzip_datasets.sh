@@ -19,9 +19,7 @@ unzip_to() {
 unzip_to "$DATA/digital_peter/images.zip" "$DATA/digital_peter"
 unzip_to "$DATA/yenisei_gov_reports_td/test_images.zip" "$DATA/yenisei_gov_reports_td"
 unzip_to "$DATA/yenisei_gov_reports_td/train_images.zip" "$DATA/yenisei_gov_reports_td"
-unzip_to "$DATA/russian_old_orthography_ocr/books-pdf-plaintext.zip" "$DATA/russian_old_orthography_ocr"
-unzip_to "$DATA/russian_old_orthography_ocr/pages-img-plaintext.zip" "$DATA/russian_old_orthography_ocr"
 
 rm -rf "$DATA/digital_peter/__MACOSX"
 
-echo "Готово. Пути: data/digital_peter/images, yenisei_*/{test_,train_}images, russian_old_orthography_ocr/{books-pdf-plaintext,pages-img-plaintext}."
+echo "Готово. Пути: data/digital_peter/images, yenisei_*/{test_,train_}images."

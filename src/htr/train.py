@@ -812,8 +812,8 @@ def run_training(cfg: dict) -> None:
 
     if not parts:
         raise RuntimeError(
-            "Не загружен ни один источник данных (проверьте пути к COCO/json и парам страницы; "
-            "для ROO см. unzip pages-img-plaintext; источники page_txt_pairs с optional: true можно пропустить)."
+            "Не загружен ни один источник данных (проверьте пути к COCO/json; для page_txt_pairs "
+            "с optional: true пропуски по FileNotFoundError допускаются)."
         )
 
     counts = [len(p) for p in parts]

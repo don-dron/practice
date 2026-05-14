@@ -4,7 +4,7 @@
 # или по умолчанию:
 #   ./scripts/archive_data_datasets.sh
 #
-# Скачать архив с Яндекс.Диска и разложить в data/digital_peter, … (в архиве в корне три папки):
+# Скачать архив с Яндекс.Диска и разложить в data/digital_peter, yenisei_gov_reports_td (в архиве в корне две папки):
 #   ./scripts/archive_data_datasets.sh fetch
 set -euo pipefail
 
@@ -20,8 +20,7 @@ pack() {
 	echo "(это несколько гигабайт — подождите)"
 	COPYFILE_DISABLE=1 tar czf "$ARCHIVE" \
 		data/digital_peter \
-		data/yenisei_gov_reports_td \
-		data/russian_old_orthography_ocr
+		data/yenisei_gov_reports_td
 	ls -lh "$ARCHIVE"
 	echo "Готово (pack)."
 }
@@ -54,25 +53,25 @@ fetch() {
 	echo "Распаковка архива во временную папку…"
 	tar xzf "$DOWNLOAD_ARCHIVE" -C "$TMP"
 
-	# Корень архива может быть напрямую из трёх папок или одна обёртка поверх них.
+	# Корень архива может быть напрямую из двух папок или одна обёртка поверх них.
 	local BASE="$TMP"
-	if [[ ! -d "$TMP/digital_peter" || ! -d "$TMP/russian_old_orthography_ocr" || ! -d "$TMP/yenisei_gov_reports_td" ]]; then
+	if [[ ! -d "$TMP/digital_peter" || ! -d "$TMP/yenisei_gov_reports_td" ]]; then
 		BASE=""
 		for cand in "$TMP"/*; do
-			if [[ -d "$cand/digital_peter" && -d "$cand/russian_old_orthography_ocr" && -d "$cand/yenisei_gov_reports_td" ]]; then
+			if [[ -d "$cand/digital_peter" && -d "$cand/yenisei_gov_reports_td" ]]; then
 				BASE="$cand"
 				break
 			fi
 		done
 	fi
 	if [[ -z "${BASE:-}" ]]; then
-		echo "Ошибка: в архиве нет набора из трёх каталогов (ни в корне tarball, ни в одной подпапке)." >&2
+		echo "Ошибка: в архиве нет набора из двух каталогов digital_peter и yenisei_gov_reports_td (ни в корне tarball, ни в одной подпапке)." >&2
 		ls -la "$TMP"
 		exit 1
 	fi
 
 	mkdir -p "$ROOT/data"
-	for d in digital_peter russian_old_orthography_ocr yenisei_gov_reports_td; do
+	for d in digital_peter yenisei_gov_reports_td; do
 		if [[ ! -d "$BASE/$d" ]]; then
 			echo "Ошибка: нет \"$BASE/$d\" после распаковки." >&2
 			exit 1
@@ -85,14 +84,14 @@ fetch() {
 	cleanup_tmp
 
 	ls -lah "$DOWNLOAD_ARCHIVE"
-	echo "Готово (fetch): \$ROOT/data/{digital_peter,russian_old_orthography_ocr,yenisei_gov_reports_td}"
+	echo "Готово (fetch): \$ROOT/data/{digital_peter,yenisei_gov_reports_td}"
 	echo "При необходимости распакуйте внутренние ZIP: ./scripts/unzip_datasets.sh"
 }
 
 usage() {
 	echo "Использование: $0 [pack|fetch]" >&2
 	echo "  pack  — собрать practice_data_datasets.tar.gz из каталогов data/" >&2
-	echo "  fetch — скачать archive.tar.gz с Яндекс.Диска и разложить три папки в data/" >&2
+	echo "  fetch — скачать archive.tar.gz с Яндекс.Диска и разложить две папки в data/" >&2
 	exit 2
 }
 

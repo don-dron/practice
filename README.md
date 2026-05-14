@@ -10,7 +10,7 @@ MTUCI Practice
 ./scripts/archive_data_datasets.sh fetch
 ```
 
-Скрипт загрузит файл `archive.tar.gz` и распакует три папки в `data/digital_peter`, `data/yenisei_gov_reports_td`, `data/russian_old_orthography_ocr`. Рабочая директория при запуске не важна, если указан полный путь к скрипту.
+Скрипт загрузит файл `archive.tar.gz` и распакует две папки в `data/digital_peter`, `data/yenisei_gov_reports_td`. Рабочая директория при запуске не важна, если указан полный путь к скрипту.
 
 Скачивание и распаковка на **Windows** из `cmd.exe` или PowerShell:
 
@@ -23,7 +23,7 @@ scripts\unzip_datasets.cmd
 
 Далее один раз распакуйте вложенные ZIP: на Unix — `./scripts/unzip_datasets.sh`, на Windows — `scripts\unzip_datasets.cmd` (ZIP через `Expand-Archive` в PowerShell; большой `tar.gz` из `fetch` распаковывается системным `%SystemRoot%\System32\tar.exe`, не `tar` из Git). Перенос во `data\` после `fetch` — `robocopy`.
 
-Параметр `pack` (или запуск без аргументов) делает обратную операцию: собирает локальные три папки в `practice_data_datasets.tar.gz` — нужен только при подготовке архива для обмена или облака, не для типичной настройки окружения.
+Параметр `pack` (или запуск без аргументов) делает обратную операцию: собирает локальные две папки в `practice_data_datasets.tar.gz` — нужен только при подготовке архива для обмена или облака, не для типичной настройки окружения.
 
 ## Строковый HTR-пайплайн (конфиг, обучение, инференс)
 

@@ -21,10 +21,6 @@ call :UnzipOne "%D%\yenisei_gov_reports_td\test_images.zip" "%D%\yenisei_gov_rep
 if errorlevel 1 exit /b 1
 call :UnzipOne "%D%\yenisei_gov_reports_td\train_images.zip" "%D%\yenisei_gov_reports_td"
 if errorlevel 1 exit /b 1
-call :UnzipOne "%D%\russian_old_orthography_ocr\books-pdf-plaintext.zip" "%D%\russian_old_orthography_ocr"
-if errorlevel 1 exit /b 1
-call :UnzipOne "%D%\russian_old_orthography_ocr\pages-img-plaintext.zip" "%D%\russian_old_orthography_ocr"
-if errorlevel 1 exit /b 1
 
 if "!ZCOUNT!"=="0" (
   echo ERROR: none of the expected zip files were found under:
@@ -34,8 +30,8 @@ if "!ZCOUNT!"=="0" (
   echo Expected files include: "!D!\digital_peter\images.zip" ...
   exit /b 1
 )
-if !ZCOUNT! LSS 5 (
-  echo WARNING: found only !ZCOUNT! of 5 zip archives ok; some datasets may still be unpacked.
+if !ZCOUNT! LSS 3 (
+  echo WARNING: found only !ZCOUNT! of 3 zip archives ok; some datasets may still be unpacked.
 )
 
 if exist "!D!\digital_peter\__MACOSX" rd /s /q "!D!\digital_peter\__MACOSX"

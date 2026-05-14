@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
-REM Full registry §5.1: T0, E1, E1*, E2, S2 to S5. Data: merged from default.yaml sources (typically 3 datasets).
+REM Full registry §5.1: T0, E1, E1*, E2, S2 to S5. Data: merged from default.yaml sources (typically 2 COCO datasets).
 REM From repo root:  scripts\train_registry_all.cmd --device cuda
 REM Snapshots: training\registry_snapshots\<tag>_latest.pt
 REM

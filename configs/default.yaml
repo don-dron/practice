@@ -6,7 +6,7 @@ project:
 
 data:
   kind: coco_lines
-  # По умолчанию — три корпуса (два COCO-строк + страницы PNG+TXT). Оверлеи не трогают sources → обучение остаётся на всех трёх.
+  # По умолчанию — два строковых COCO-корпуса (Yenisei + Digital Peter). Оверлеи не трогают sources → смесь источников как в этом списке.
   # Чтобы брать только один набор после merge, переопределите data.sources явным одноэлементным списком.
   sources:
     - kind: coco_lines
@@ -19,11 +19,6 @@ data:
       image_root: "data/digital_peter/images"
       text_field: "translation"
       cache_namespace: "digital_peter"
-    - kind: page_txt_pairs
-      pair_root: "data/russian_old_orthography_ocr"
-      cache_namespace: "russian_old_orthography"
-      max_text_chars: 8192
-      optional: true
   page_txt_max_chars_default: null
   coco_json: "data/yenisei_gov_reports_td/train.json"
   image_root: "data/yenisei_gov_reports_td/train_images"
@@ -77,7 +72,7 @@ training:
   weight_decay: 0.0
   clip_grad_norm: 5.0
   checkpoint_dir: "training/checkpoints"
-  experiment_name: "multi_yenisei_dp_roo"
+  experiment_name: "multi_yenisei_dp"
   save_every_epochs: 1
   # false + resume: загрузить веса и продолжить с эпохи completed_epoch+1 (в .pt сохраняется completed_epoch).
   # Уже сохранённые эпохи не считаются заново (цикл только range(start_epoch, epochs+1)). Запись .pt всё так же может

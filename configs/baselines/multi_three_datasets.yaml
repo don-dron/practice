@@ -1,9 +1,8 @@
-# Алиас методологии: то же объединение трёх корпусов, что уже в configs/default.yaml (data.sources).
-# Дополнительный YAML не обязателен — достаточно: htr-train --config configs/default.yaml
-#
-# ROO: распакуйте страницы (pages-img-plaintext); при отсутствии пар источник с optional пропускается с предупреждением.
+# Алиас методологии: то же объединение двух COCO-корпусов, что в configs/default.yaml (data.sources).
+# Имя файла историческое (раньше был третий источник page_txt_pairs). Дополнительный YAML не обязателен:
+#   htr-train --config configs/default.yaml
 
 methodology_profile:
   report_section: "multi"
-  short_name: yenisei_peter_oldorth_pages
+  short_name: yenisei_peter_coco_lines
   status: trainable
