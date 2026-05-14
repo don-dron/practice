@@ -1,0 +1,5 @@
+error_type_code,description,count_lines_sample_3p2k,share_pct
+CONFUS_NEAR,Близкие формы кириллицы после ресайза,118,42.3
+EXTRA_NOISE_FLOOR,Фон ниже базовой линии строки,64,23.4
+SKIP_RARE_CTCT,Пропуск на длинной ленте CTC-бланка без LM,53,17.9
+GEO_BBOX_MISMATCH,Неудачное выравнивание bbox строки и растра,45,16.4

@@ -1,0 +1,8 @@
+run,proxy_ser_star,proxy_cer_star,wallclock_h_5ep,peak_vram_gib,infer_latency_ms_mean,epoch_first_loss_below_55,ctc_infer_comparable,inference_throughput_chars_s_approx
+T0,0.364,0.108,19.8,3.95,2.82,3,true,11800
+E1,0.379,0.112,20.2,3.93,2.79,3,true,11950
+E2,0.382,0.113,20.6,3.96,2.81,3,true,11720
+S2,,,24.9,4.86,6.52,,false,7420
+S3,0.441,0.129,86.8,5.71,14.06,5,true,4820
+S4,,,88.9,5.92,16.20,5,false,4100
+S5,0.372,0.117,22.9,4.93,10.94,3,true,5310

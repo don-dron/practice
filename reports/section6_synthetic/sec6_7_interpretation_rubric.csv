@@ -1,0 +1,7 @@
+criterion,weight_0_to_100,achievement_synthetic_pct
+VRAM_fit_8GiB_budget,95,93
+Greedy_inference_latency_budget,91,94
+Comparable_CTC_SER_rank,93,92
+Stable_train_curve_CTC_family,82,91
+Historical_domain_coverage_YenTD,71,73
+External_public_bench_claim,49,52

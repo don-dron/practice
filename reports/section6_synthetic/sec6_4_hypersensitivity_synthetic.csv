@@ -1,0 +1,6 @@
+variant_label,lr,batch_effective_via_accum,max_width_px,synthetic_holdout_proxy_ser,approx_train_hours_note
+baseline_T0_yaml,0.05,16,512,0.364,19.8
+lr_half,0.025,16,512,0.379,21.6
+accum8,0.05,8,512,0.397,34.8
+accum32,0.05,32,512,0.369,41.9
+wide640,0.05,16,640,0.371,26.9

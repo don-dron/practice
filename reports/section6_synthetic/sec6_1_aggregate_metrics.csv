@@ -1,0 +1,7 @@
+run,proxy_ser_star,proxy_cer_star_final,train_loss_epoch5_notes,infer_latency_ms,val_fraction_used
+T0,0.364,0.108,CTC CTCLoss avg 28.4,2.82,0.0
+E1,0.379,0.112,matches T0 profile,2.79,0.0
+E2,0.382,0.113,,2.81,0.0
+S2,,,Attention CE metric 7.92,6.52,0.0
+S3,0.441,0.129,CTC 72.9,14.06,0.0
+S5,0.372,0.117,CTC 31.9,10.94,0.0
