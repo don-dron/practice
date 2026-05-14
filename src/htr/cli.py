@@ -16,6 +16,7 @@ def train_main() -> None:
         or os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "").strip()
     ):
         os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     try:
         mp.set_start_method("spawn")

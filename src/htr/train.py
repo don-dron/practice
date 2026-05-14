@@ -165,6 +165,7 @@ def _resume_load_and_start_epoch(
     *,
     experiment: str,
     total_epochs: int,
+    cfg: dict,
 ) -> int:
     """Загружает веса при включённом resume; возвращает номер первой эпохи цикла (1-based)."""
     if not _effective_resume_if_checkpoint_exists(tc):
@@ -197,11 +198,41 @@ def _resume_load_and_start_epoch(
         print(f"[htr-train] resume: в {src} нет state_dict — старт с эпохи 1.")
         return 1
 
-    incomp = model.load_state_dict(sd, strict=False)
+    ck_nm = payload.get("model_name")
+    want_nm = cfg.get("model", {})
+    want_nm_s = str(want_nm.get("name", "")) if isinstance(want_nm, dict) else ""
+
+    def _nms(a: object) -> str:
+        return str(a).strip() if isinstance(a, str) else ""
+
+    if _nms(ck_nm) and want_nm_s and _nms(ck_nm) != want_nm_s:
+        print(
+            f"[htr-train] resume: пропуск загрузки весов — в checkpoint model_name={ck_nm!r}, "
+            f"ожидается {want_nm_s!r} (слой lstm vs enc_lstm и т.д. ломает обучение). "
+            "Поставьте training.resume_if_checkpoint_exists: false, другой checkpoint_dir или удалите не тот "
+            "`latest.pt`."
+        )
+        return 1
+
+    mk = model.state_dict()
+    filtered = {
+        k: sd[k]
+        for k, v in mk.items()
+        if k in sd and isinstance(sd[k], torch.Tensor) and isinstance(v, torch.Tensor) and sd[k].shape == v.shape
+    }
+    if len(mk) and len(filtered) < len(mk) * 0.90:
+        print(
+            f"[htr-train] resume: пропуск — совпало только {len(filtered)}/{len(mk)} тензоров по ключу/shape "
+            "(скорее другая архитектура). Обучение с инициализации."
+        )
+        return 1
+
+    incomp = model.load_state_dict(filtered, strict=False)
     if incomp.missing_keys:
-        print(f"[htr-train] resume: missing_keys ({len(incomp.missing_keys)}), пример: {incomp.missing_keys[:3]}")
-    if incomp.unexpected_keys:
-        print(f"[htr-train] resume: unexpected_keys ({len(incomp.unexpected_keys)}), пример: {incomp.unexpected_keys[:3]}")
+        print(
+            f"[htr-train] resume: из чекпоинта подставлено {len(filtered)}/{len(mk)} тензоров; "
+            f"{len(incomp.missing_keys)} ключей остаётся с инициализацией (пример: {incomp.missing_keys[:3]})."
+        )
 
     completed = _infer_completed_epoch_from_resume(payload, src, ckpt_dir, experiment)
     start_epoch = completed + 1
@@ -449,6 +480,36 @@ def _attention_hypothesis(ce_tokens: list[int], charset: Charset) -> str:
         if 1 <= cid < len(charset.itos):
             out.append(charset.itos[cid])
     return "".join(out)
+
+
+def _attention_ce_loss_microbatched(
+    model: AttentionLineSeq2Seq,
+    images: torch.Tensor,
+    tin_y: torch.Tensor,
+    targ_y: torch.Tensor,
+    m_ok: torch.Tensor,
+    tc: dict,
+) -> torch.Tensor:
+    """CE teacher-forcing через микробатчи: меньше пикVRAM при развёрнутом декодере на 8 ГБ."""
+    b = int(images.shape[0])
+    raw = tc.get("attention_loss_microbatch")
+    try:
+        ch = max(1, int(raw)) if raw is not None else b
+    except (TypeError, ValueError):
+        ch = b
+    ch = min(ch, b)
+    tv = float(m_ok.float().sum().clamp(min=1.0))
+    if ch >= b:
+        return model.compute_loss_ce(images, tin_y, targ_y, m_ok)
+    acc = images.new_zeros(())
+    for i in range(0, b, ch):
+        j = min(i + ch, b)
+        vi = float(m_ok[i:j].float().sum())
+        if vi < 1.0:
+            continue
+        lm = model.compute_loss_ce(images[i:j], tin_y[i:j], targ_y[i:j], m_ok[i:j])
+        acc = acc + lm * (vi / tv)
+    return acc
 
 
 class _DataloaderWorkerTorchThreadsInit:
@@ -956,7 +1017,9 @@ def run_training(cfg: dict) -> None:
     model = resolve_model(cfg, charset.num_classes).to(device)
     ckpt_dir = Path(str(cfg["training"].get("checkpoint_dir", "training/checkpoints"))).expanduser().resolve()
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    start_epoch = _resume_load_and_start_epoch(model, tc, ckpt_dir, experiment=experiment, total_epochs=epochs)
+    start_epoch = _resume_load_and_start_epoch(
+        model, tc, ckpt_dir, experiment=experiment, total_epochs=epochs, cfg=cfg
+    )
     if start_epoch > epochs:
         return
 
@@ -1005,7 +1068,7 @@ def run_training(cfg: dict) -> None:
                 tin_y, targ_y, m_ok = _prepare_attention_batches(model, charset, texts_batch, device, decoder_cap)
                 if use_amp:
                     with _autocast_cuda():
-                        loss = model.compute_loss_ce(images, tin_y, targ_y, m_ok)
+                        loss = _attention_ce_loss_microbatched(model, images, tin_y, targ_y, m_ok, tc)
                     scaler.scale(loss).backward()
                     clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
                     if clip_val > 0:
@@ -1014,7 +1077,7 @@ def run_training(cfg: dict) -> None:
                     scaler.step(optim_)
                     scaler.update()
                 else:
-                    loss = model.compute_loss_ce(images, tin_y, targ_y, m_ok)
+                    loss = _attention_ce_loss_microbatched(model, images, tin_y, targ_y, m_ok, tc)
                     loss.backward()
                     clip_val = float(cfg["training"].get("clip_grad_norm", 5.0))
                     if clip_val > 0:
