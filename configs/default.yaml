@@ -35,6 +35,8 @@ data:
   val_fraction: 0.05                   # простой случайный hold-out если отдельного val-json нет
   # Скорость vs CPU: меньше воркеров → меньше загрузка CPU, но часто дольше эпоха (GPU ждёт). Реально уменьшить работу
   # CPU на тот же темп — дать заполниться preprocessed_cache_dir (после 1-го прохода декода меньше).
+  # PNG-heavy: decode всё ещё на CPU (libpng); GPU грузится сильнее после заполнения preprocessed_cache_dir или при JPEG.
+  # Поднять num_workers / SSD; оффлайн конверт PNG→JPEG для COCO ускоряет подачу (nvJPEG в collate).
   num_workers: 96
   # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU).
   # auto — при training.hardware_utilization: max; иначе трактуется как 1. Явное число | 0 — не трогать воркер.

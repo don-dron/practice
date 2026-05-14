@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import torch
@@ -196,23 +198,30 @@ def _chw_to_gray01_float(chw: torch.Tensor) -> torch.Tensor:
     raise RuntimeError(f"неожиданное число каналов после decode_png: {c}")
 
 
-def _page_png_bytes_to_line_tensor_cuda(
-    png_1d_uint8: torch.Tensor,
+def _decode_png_bytes_cpu(jb: torch.Tensor, *, page_rgb: bool = False) -> torch.Tensor:
+    """Один PNG как 1D uint8 → CHW на CPU. COCO crop: UNCHANGED как раньше; page_txt: RGB."""
+    try:
+        from torchvision.io import ImageReadMode, decode_png
+    except Exception as ex:
+        raise RuntimeError("torchvision.io.decode_png недоступен") from ex
+    b = jb.flatten() if jb.dim() != 1 else jb
+    mode = ImageReadMode.RGB if page_rgb else ImageReadMode.UNCHANGED
+    return decode_png(b, mode=mode)
+
+
+def _png_decode_thread_max(n_items: int) -> int:
+    cpu = int(os.cpu_count() or 4)
+    return max(1, min(n_items, 8, max(1, cpu // 2)))
+
+
+def _chw_cuda_page_to_line_tensor(
+    chw_cpu: torch.Tensor,
     *,
     device: torch.device,
     img_height: int,
     max_width: Optional[int],
 ) -> torch.Tensor:
-    """Сырые байты PNG страницы → линия float [-1,1] на GPU (decode_png в lib — CPU, далее только CUDA)."""
-    try:
-        from torchvision.io import ImageReadMode, decode_png
-    except Exception as ex:
-        raise RuntimeError("torchvision.io.decode_png недоступен") from ex
-    b = png_1d_uint8
-    if b.dim() != 1:
-        b = b.flatten()
-    chw = decode_png(b, mode=ImageReadMode.RGB)
-    chw = chw.to(device, non_blocking=True)
+    chw = chw_cpu.to(device, non_blocking=True)
     gray01 = _chw_to_gray01_float(chw)
     _, hi, wi_src = gray01.shape
     new_w = max(1, round(float(wi_src) * float(img_height) / float(hi)))
@@ -221,6 +230,18 @@ def _page_png_bytes_to_line_tensor_cuda(
     y = F.interpolate(gray01.unsqueeze(0), size=(img_height, new_w), mode="bilinear", align_corners=False).squeeze(0)
     y = y.mul_(2.0).sub_(1.0)
     return y.unsqueeze(0)
+
+
+def _page_png_bytes_to_line_tensor_cuda(
+    png_1d_uint8: torch.Tensor,
+    *,
+    device: torch.device,
+    img_height: int,
+    max_width: Optional[int],
+) -> torch.Tensor:
+    """Сырые байты PNG страницы → линия float [-1,1] на GPU."""
+    chw = _decode_png_bytes_cpu(png_1d_uint8, page_rgb=True)
+    return _chw_cuda_page_to_line_tensor(chw, device=device, img_height=img_height, max_width=max_width)
 
 
 def collate_gpu_lines_jpeg_cuda_batch(
@@ -285,14 +306,17 @@ def collate_gpu_lines_jpeg_cuda_batch(
 
     if idx_png_crop:
         try:
-            from torchvision.io import decode_png
+            from torchvision.io import decode_png  # noqa: F401 — проверка наличия
         except Exception as ex:
             raise RuntimeError("torchvision.io.decode_png недоступен") from ex
-        for gi in idx_png_crop:
-            jb = batch[gi]["png_bytes"]  # type: ignore[misc]
-            if jb.dim() != 1:
-                jb = jb.flatten()
-            chw = decode_png(jb)
+        jbs = [batch[gi]["png_bytes"] for gi in idx_png_crop]  # type: ignore[misc]
+        if len(jbs) <= 1:
+            chws_cpu = [_decode_png_bytes_cpu(jbs[0])] if jbs else []
+        else:
+            mx = _png_decode_thread_max(len(jbs))
+            with ThreadPoolExecutor(max_workers=mx) as ex:
+                chws_cpu = list(ex.map(_decode_png_bytes_cpu, jbs))
+        for gi, chw in zip(idx_png_crop, chws_cpu):
             chw = chw.to(device, non_blocking=True)
             row_tensors[gi] = _line_tensor_from_rgb_chw_cuda(
                 chw,
@@ -303,10 +327,20 @@ def collate_gpu_lines_jpeg_cuda_batch(
             )
 
     if idx_png_page:
-        for gi in idx_png_page:
-            jb = batch[gi]["png_bytes"]  # type: ignore[misc]
-            row_tensors[gi] = _page_png_bytes_to_line_tensor_cuda(
-                jb,
+        jbs = [batch[gi]["png_bytes"] for gi in idx_png_page]  # type: ignore[misc]
+
+        def _dec_page(jb: torch.Tensor) -> torch.Tensor:
+            return _decode_png_bytes_cpu(jb, page_rgb=True)
+
+        if len(jbs) <= 1:
+            chws_cpu = [_dec_page(jbs[0])] if jbs else []
+        else:
+            mx = _png_decode_thread_max(len(jbs))
+            with ThreadPoolExecutor(max_workers=mx) as ex:
+                chws_cpu = list(ex.map(_dec_page, jbs))
+        for gi, chw in zip(idx_png_page, chws_cpu):
+            row_tensors[gi] = _chw_cuda_page_to_line_tensor(
+                chw,
                 device=device,
                 img_height=img_height,
                 max_width=max_width,
