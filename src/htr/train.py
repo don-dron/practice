@@ -6,15 +6,17 @@ import os
 import sys
 from typing import Optional
 
+import bisect
+
 import torch
 from torch import nn
 import torch.optim as optim
-from torch.utils.data import ConcatDataset
+from torch.utils.data import ConcatDataset, Dataset
 from tqdm import tqdm
 
 from htr.charset import Charset, charset_from_strings
 from htr.data.coco_lines import COCOLinesDataset, coco_collate_fn
-from htr.data.page_txt_pairs import PageTxtPairsDataset
+from htr.data.page_txt_pairs import PageTxtPairsDataset, _normalize_document_text
 from htr.data.split import Subset, random_split_indices
 from htr.device import move_batch_to_device, pick_device
 from htr.eval.metrics import lev_ratio
@@ -23,6 +25,27 @@ from htr.models import resolve_model
 from htr.models.attention_line import AttentionLineSeq2Seq
 from htr.models.resnet_pretrained_line_ctc import PretrainedResnetLineCTC
 from htr.transforms import TrainAugmentation
+
+
+def _text_at_index_for_charset(ds: Dataset, idx: int) -> str:
+    """Текст по индексу без декодирования изображений (иначе COCO на сотнях тысяч строк «висит» на старте)."""
+    if isinstance(ds, Subset):
+        return _text_at_index_for_charset(ds.ds, int(ds.indices[idx]))
+    if isinstance(ds, ConcatDataset):
+        i = int(idx)
+        cums = ds.cumulative_sizes
+        di = bisect.bisect_right(cums, i)
+        off = i if di == 0 else i - int(cums[di - 1])
+        return _text_at_index_for_charset(ds.datasets[di], off)
+    if isinstance(ds, COCOLinesDataset):
+        return str(ds.samples[int(idx)][1])
+    if isinstance(ds, PageTxtPairsDataset):
+        _, txt_path = ds.samples[int(idx)]
+        with open(txt_path, "r", encoding="utf-8", errors="replace") as f:
+            raw = f.read()
+        return _normalize_document_text(raw, ds.max_text_chars)
+    item = ds[int(idx)]
+    return str(item["text"])
 
 
 def _make_grad_scaler(enabled: bool):
@@ -370,7 +393,15 @@ def run_training(cfg: dict) -> None:
     vf = float(dc.get("val_fraction", 0.0))
     train_ix, val_ix = random_split_indices(len(full_ds), vf, seed=seed)
 
-    texts_train = [full_ds[i]["text"] for i in train_ix]  # type: ignore[index,misc]
+    if len(train_ix) > 50_000:
+        print(
+            "[htr-train] сбор алфавита: читаем только подписи из разметки (без JPEG/PNG — иначе старт занимал бы часы)…"
+        )
+    if len(train_ix) > 80_000:
+        _ti = tqdm(train_ix, desc="[htr-train] тексты для Charset", mininterval=2.0, unit="стр")
+    else:
+        _ti = train_ix
+    texts_train = [_text_at_index_for_charset(full_ds, i) for i in _ti]
 
     extra = cfg.get("charset", {}).get("extra_chars") or ""
     charset = charset_from_strings(texts_train, extra)
