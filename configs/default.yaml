@@ -87,7 +87,8 @@ training:
   # Явный путь к .pt (проверяется первым); иначе берётся checkpoint_dir/latest.pt
   # resume_checkpoint: null
   amp: true
-  # true — nvJPEG в collate в воркерах (больше VRAM по PID). false — декод JPEG в воркерах на CPU, меньше пик VRAM.
+  # true — nvJPEG в collate; при включённом preprocessed_cache_dir COCO JPG/PNG всё равно пойдёт в CPU→.pt один раз на строку,
+  # иначе каждая эпоха заново читает байты без дискового кэша. false — сразу CPU u8→.pt.
   cuda_jpeg_decode_batched: false
   # После кропа (uint8): ресайз линии + [-1,1] на GPU для COCO/page_txt при cuda/mps. Сам декод PNG/страницы page_txt — в воркерах на CPU (см. лог [htr-train] CPU/GPU).
   cuda_line_resize_on_device: true

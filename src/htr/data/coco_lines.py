@@ -549,34 +549,38 @@ class COCOLinesDataset(Dataset):
             if got is not None:
                 return got
 
-            # Промах кэша: JPEG — байты → collate decode_jpeg(CUDA); PNG — байты → decode_png→CUDA; иначе CPU-декод.
+            # Промах u8 по RAM/диску. Быстрый путь: сырая JPEG/PNG в collate (nvJPEG/decode_png на GPU)
+            # — но тогда .pt на диск не пишется и каждая эпоха снова платит за чтение/декод.
+            # Если включён preprocessed_cache_dir — один раз грузим u8 на CPU, сохраняем .pt, дальше только диск.
             if self._jpeg_cuda and self.train_augment is None:
                 sfx = Path(fname).suffix.lower()
-                if sfx in (".jpg", ".jpeg"):
-                    data = img_path.read_bytes()
-                    jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
-                    if _file_bytes_look_like_png(data):
+                disk_wants_pt = cache_root is not None and bool(key_hex)
+                if not disk_wants_pt:
+                    if sfx in (".jpg", ".jpeg"):
+                        data = img_path.read_bytes()
+                        jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                        if _file_bytes_look_like_png(data):
+                            return {
+                                LINE_PREP_KEY: LINE_PREP_PNG_CROP,
+                                "png_bytes": jb,
+                                "bbox": bbox,
+                                "text": text,
+                            }
+                        return {
+                            LINE_PREP_KEY: LINE_PREP_JPEG_CUDA,
+                            "jpeg_bytes": jb,
+                            "bbox": bbox,
+                            "text": text,
+                        }
+                    if sfx == ".png":
+                        data = img_path.read_bytes()
+                        jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
                         return {
                             LINE_PREP_KEY: LINE_PREP_PNG_CROP,
                             "png_bytes": jb,
                             "bbox": bbox,
                             "text": text,
                         }
-                    return {
-                        LINE_PREP_KEY: LINE_PREP_JPEG_CUDA,
-                        "jpeg_bytes": jb,
-                        "bbox": bbox,
-                        "text": text,
-                    }
-                if sfx == ".png":
-                    data = img_path.read_bytes()
-                    jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
-                    return {
-                        LINE_PREP_KEY: LINE_PREP_PNG_CROP,
-                        "png_bytes": jb,
-                        "bbox": bbox,
-                        "text": text,
-                    }
 
             got2 = _take_u8_from_disk()
             if got2 is not None:

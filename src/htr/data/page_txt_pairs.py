@@ -323,7 +323,12 @@ class PageTxtPairsDataset(Dataset):
             got = _take_u8_from_disk()
             if got is not None:
                 return got
-            if self._png_bytes_collate and self.train_augment is None:
+            # Без дискового cache_dir оставляем сырой PNG в collate — иначе каждая эпоха без записи .pt.
+            if (
+                self._png_bytes_collate
+                and self.train_augment is None
+                and (cache_root is None or not key_hex)
+            ):
                 data = png_path.read_bytes()
                 jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
                 return {
