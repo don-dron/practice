@@ -37,8 +37,8 @@ data:
   # CPU на тот же темп — дать заполниться preprocessed_cache_dir (после 1-го прохода декода меньше).
   # PNG-heavy: decode всё ещё на CPU (libpng); GPU грузится сильнее после заполнения preprocessed_cache_dir или при JPEG.
   # Поднять num_workers / SSD; оффлайн конверт PNG→JPEG для COCO ускоряет подачу (nvJPEG в collate).
-  # Дефолт занижен под VRAM: main + воркеры делят GPU при collate. Поднимайте при простое GPU и без OOM.
-  num_workers: 4
+  # Меньше воркеров — меньше одновременных CUDA-контекстов / пик VRAM. При OOM попробуйте 0 или configs/oom_safe.yaml.
+  num_workers: 2
   # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU).
   # auto — при training.hardware_utilization: max; иначе трактуется как 1. Явное число | 0 — не трогать воркер.
   dataloader_worker_torch_threads: auto
@@ -55,7 +55,7 @@ data:
   preprocessed_cache_dir: "training/preprocessed_cache"
   # LRU строк в RAM, сумма ~GiB между пулами workers train+val; при num_workers=0 всё на главном процессе.
   # 0 — только диск-кэш (если указан preprocessed_cache_dir) или без кэша.
-  preprocessed_ram_cache_max_gb: 2
+  preprocessed_ram_cache_max_gb: 1
   # если пусто — алфавит собирается по обучающей выборке перед стартом
   extra_chars: ""
 
@@ -69,8 +69,8 @@ model:
 training:
   # normal | max | low — по умолчанию max: авто main/interop/OMP, prefetch/worker threads auto; для слабой машины: normal
   hardware_utilization: max
-  # Дефолт под меньше OOM: batch↓, JPEG decode не в воркерах CUDA, без async prefetch. Для скорости на большой карте — поднимите.
-  batch_size: 256
+  # При CUDA OOM ещё↓ batch / num_workers или oom_safe.yaml; PYTORCH_ALLOC_CONF=expandable_segments:True против фрагментации.
+  batch_size: 128
   epochs: 5
   # lr = 0.01 (одна сотая); при нестабильном loss уменьшите.
   lr: 0.01

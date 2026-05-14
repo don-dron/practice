@@ -1,9 +1,13 @@
-# Если даже default (batch 256, workers 4) падает по VRAM — второй оверлей:
-#   htr-train --config configs/default.yaml --config configs/oom_safe.yaml
+# Сильное урезание VRAM (второй конфиг поверх default):
+#   PYTORCH_ALLOC_CONF=expandable_segments:True \
+#     htr-train --config configs/default.yaml --config configs/oom_safe.yaml
 
 training:
-  batch_size: 128
+  batch_size: 64
   lr: 0.01
+  # линия остаётся float на CPU до move на device — меньше памяти GPU в collate
+  cuda_line_resize_on_device: false
+  val_max_batches: 32
 
 data:
   num_workers: 0
