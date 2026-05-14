@@ -29,7 +29,7 @@ data:
   min_crop_width: 4
   val_fraction: 0                    # 0 = без val (раньше split оставлял ≥1 пример в val — лишняя работа)
   # Целое >1: случайная подвыборка ~ N/div строк train split (алфавит собирается только по ним). 1 — без сужения.
-  train_subsample_divisor: 30
+  train_subsample_divisor: 90
   # Скорость vs CPU vs VRAM: num_workers и nvJPEG; на малой VRAM → oom_safe или num_workers: 0.
   # PNG-heavy: decode на CPU. Заполненный preprocessed_cache_dir ускоряет повторные эпохи.
   num_workers: 8
