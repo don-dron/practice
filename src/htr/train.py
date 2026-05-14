@@ -74,6 +74,51 @@ def _pack_targets(texts_batch: list[str], charset: Charset, device: torch.device
     return concat, tlens
 
 
+def _optional_positive_int(raw: object) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        n = int(raw)
+        return n if n > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_apply_main_torch_threads(tc: dict) -> None:
+    mtp = tc.get("main_torch_threads")
+    if mtp is None:
+        return
+    try:
+        mt = max(1, int(mtp))
+        torch.set_num_threads(mt)
+        print(f"[htr-train] main_process torch.set_num_threads({mt})")
+    except (TypeError, ValueError):
+        pass
+
+
+def _maybe_torch_compile(model: nn.Module, tc: dict, device: torch.device) -> nn.Module:
+    if device.type != "cuda":
+        return model
+    if not bool(tc.get("torch_compile", False)):
+        return model
+    if not hasattr(torch, "compile"):
+        print("[htr-train] training.torch_compile=true, но torch.compile недоступен — пропуск")
+        return model
+    mode = tc.get("torch_compile_mode", "default")
+    if not isinstance(mode, str):
+        mode = "default"
+    print(f"[htr-train] torch.compile(mode={mode!r}, dynamic=True if supported); первый запуск может быть дольше")
+    compile_fn = torch.compile  # type: ignore[attr-defined]
+    try:
+        return compile_fn(model, mode=mode, dynamic=True)  # type: ignore[misc]
+    except TypeError:
+        try:
+            return compile_fn(model, mode=mode)
+        except Exception as ex:
+            print(f"[htr-train] torch.compile не удался ({ex!r}) — обучение без компиляции")
+            return model
+
+
 def _training_objective(cfg: dict) -> str:
     return str(cfg.get("training", {}).get("objective", "ctc")).strip().lower()
 
@@ -339,6 +384,11 @@ def run_training(cfg: dict) -> None:
     decoder_cap = _decoder_max_steps(cfg)
     seed = int(cfg["project"]["seed"])
     torch.manual_seed(seed)
+    tc = cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
+    _maybe_apply_main_torch_threads(tc)
+    val_max_batches = _optional_positive_int(tc.get("val_max_batches"))
+    if val_max_batches is not None:
+        print(f"[htr-train] val_max_batches={val_max_batches} (val-метрика только по первым N батчам — быстрее эпоха)")
 
     dc = cfg["data"]
     nw = _dataload_worker_count(dc)
@@ -497,7 +547,6 @@ def run_training(cfg: dict) -> None:
                 "усилить GPU: batch_size↑, preprocessed_cache_dir (SSD), num_workers ≈ числу ядер без гиперпростоя."
             )
 
-    tc = cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
     if device.type == "cuda":
         if tc.get("cudnn_benchmark", True):
             torch.backends.cudnn.benchmark = True
@@ -515,6 +564,7 @@ def run_training(cfg: dict) -> None:
             "Install GPU build: https://pytorch.org/get-started/locally/"
         )
     model = resolve_model(cfg, charset.num_classes).to(device)
+    model = _maybe_torch_compile(model, tc, device)
 
     freeze_ep = _freeze_backbone_epochs(cfg)
 
@@ -612,7 +662,9 @@ def run_training(cfg: dict) -> None:
             if not val_ix:
                 print(f"[epoch {epoch}] train_loss={mean_train:.4f} (val: пусто val_fraction)")
             else:
-                for vbatch in tqdm(loader_val, desc=f"val {epoch}", leave=False):
+                for vb_i, vbatch in enumerate(tqdm(loader_val, desc=f"val {epoch}", leave=False)):
+                    if val_max_batches is not None and vb_i >= val_max_batches:
+                        break
                     b_v = move_batch_to_device(vbatch, device)
                     imgs_b = b_v["image"]  # type: ignore[arg-type]
                     refs_txt: list[str] = b_v["text"]  # type: ignore[list-item]
@@ -632,7 +684,12 @@ def run_training(cfg: dict) -> None:
                             cer_sum += ratio_val
                             n_lab += 1
                 avg_cer = cer_sum / max(1, n_lab)
-                print(f"[epoch {epoch}] train_loss={mean_train:.4f} val_sym_error_ratio={avg_cer:.4f}")
+                val_note = (
+                    f" [первые ≤{val_max_batches} val-батчей]"
+                    if val_max_batches is not None
+                    else ""
+                )
+                print(f"[epoch {epoch}] train_loss={mean_train:.4f} val_sym_error_ratio={avg_cer:.4f}{val_note}")
 
         save_every = max(1, int(cfg["training"].get("save_every_epochs", 1)))
         if epoch % save_every == 0:

@@ -39,7 +39,7 @@ data:
   dataloader_worker_torch_threads: 1
 
   augmentation_train: false
-  prefetch_factor: 8
+  prefetch_factor: 12
   # После первого прохода датасета — строки как .pt по хэшу (имя файла,bbox,height,max_width,min_width).
   # Снимает декод JPEG на последующих эпохах; не совместимо с augmentation_train: true. Очистка: удалите каталог.
   preprocessed_cache_dir: "training/preprocessed_cache"
@@ -68,6 +68,14 @@ training:
   amp: true
   cudnn_benchmark: true
   allow_tf32: true
+  # Меньше потоков BLAS в главном процессе — иногда быстрее подаётся батч при CUDA и num_workers>0. null = не менять.
+  main_torch_threads: null
+  # Усечь val до N батчей (сильно ускоряет эпоху; val-метрика по подвыборке). null = прогонять весь val.
+  val_max_batches: 120
+  # Только PyTorch 2+ и CUDA: компиляция графа (первый проход медленнее; бывает несовместима с частью моделей).
+  torch_compile: false
+  # default | reduce-overhead | max-autotune
+  torch_compile_mode: default
 
 infer:
   checkpoint: "training/checkpoints/latest.pt"
