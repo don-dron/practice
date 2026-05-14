@@ -30,6 +30,11 @@ _LINES_PT_CACHE_MAGIC = "htr_lines_pt_v1"
 _LINES_U8_CACHE_MAGIC = "htr_lines_pt_u8_v1"
 
 
+def _file_bytes_look_like_png(data: bytes) -> bool:
+    """Файл с расширением .jpg иногда на самом деле PNG (ошибка экспорта)."""
+    return len(data) >= 4 and data[0] == 0x89 and data[1:4] == b"PNG"
+
+
 def _lines_tensor_cache_key(
     fname: str,
     bbox: Tuple[float, float, float, float],
@@ -486,6 +491,13 @@ class COCOLinesDataset(Dataset):
                 if sfx in (".jpg", ".jpeg"):
                     data = img_path.read_bytes()
                     jb = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                    if _file_bytes_look_like_png(data):
+                        return {
+                            LINE_PREP_KEY: LINE_PREP_PNG_CROP,
+                            "png_bytes": jb,
+                            "bbox": bbox,
+                            "text": text,
+                        }
                     return {
                         LINE_PREP_KEY: LINE_PREP_JPEG_CUDA,
                         "jpeg_bytes": jb,

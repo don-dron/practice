@@ -20,44 +20,70 @@ U8_KIND_COCO_CROP = "coco_crop"
 U8_KIND_PAGE_READY = "page_ready"
 HTR_BATCH_ON_DEVICE = "_htr_lines_on_device"
 
-# Лог один раз: батчевый nvJPEG упал → поштучный CPU/GPU fallback
+# «Ложные» JPEG в батче — nvJPEG падает; поштучный fallback (опциональный лог в env).
 _jpeg_cuda_batch_fallback_logged = False
+
+
+def _tensor_png_magic(b: torch.Tensor) -> bool:
+    b = b.flatten()
+    if int(b.numel()) < 4:
+        return False
+    x = b[:4]
+    v = [int(x[i].item()) for i in range(4)]
+    return v[0] == 0x89 and v[1] == 0x50 and v[2] == 0x4E and v[3] == 0x47
+
+
+def _decode_one_jpeg_bytes_to_chw_cuda(jb: torch.Tensor, device: torch.device, cpu: torch.device) -> torch.Tensor:
+    """Один файл как byte tensor → CHW uint8 на CUDA (JPEG или PNG при ошибке «Not a JPEG»)."""
+    from torchvision.io import ImageReadMode, decode_jpeg, decode_png
+
+    try:
+        d = decode_jpeg(jb, device=device)
+    except RuntimeError:
+        try:
+            d = decode_jpeg(jb, device=cpu)
+            d = d.to(device, non_blocking=True)
+        except RuntimeError:
+            if _tensor_png_magic(jb):
+                b = jb.flatten() if jb.dim() != 1 else jb
+                d = decode_png(b, mode=ImageReadMode.UNCHANGED)
+                d = d.to(device, non_blocking=True)
+            else:
+                raise
+    if isinstance(d, (list, tuple)):
+        if len(d) != 1:
+            raise RuntimeError("decode_jpeg: ожидался один кадр")
+        return d[0]
+    return d
 
 
 def _decode_jpeg_bytes_list_cuda_with_cpu_fallback(
     byte_tensors: List[torch.Tensor],
     device: torch.device,
 ) -> List[torch.Tensor]:
-    """Батч decode_jpeg(CUDA); при сбое nvJPEG (редкие JPEG / один битый кадр) — поштучно CUDA→CPU."""
+    """Батч decode_jpeg(CUDA); сбой nvJPEG — поштучно; «не JPEG»/PNG по сигнатуре — decode_png."""
     global _jpeg_cuda_batch_fallback_logged
     try:
         from torchvision.io import decode_jpeg
     except Exception as ex:
         raise RuntimeError("torchvision.io.decode_jpeg недоступен") from ex
 
+    cpu = torch.device("cpu")
     try:
         out = decode_jpeg(byte_tensors, device=device)
         if not isinstance(out, (list, tuple)):
             return [out]
         return list(out)
     except RuntimeError:
-        if not _jpeg_cuda_batch_fallback_logged:
-            print(
-                "[htr-train] decode_jpeg: батч на CUDA не удался (nvJPEG/формат) — поштучно; при необходимости CPU."
-            )
-            _jpeg_cuda_batch_fallback_logged = True
-        cpu = torch.device("cpu")
+        if os.environ.get("HTR_VERBOSE_JPEG_DECODE", "").strip() in ("1", "true", "yes"):
+            if not _jpeg_cuda_batch_fallback_logged:
+                print(
+                    "[htr-train] decode_jpeg: батч CUDA не удался — поштучный fallback (см. HTR_VERBOSE_JPEG_DECODE)."
+                )
+                _jpeg_cuda_batch_fallback_logged = True
         decoded: List[torch.Tensor] = []
         for jb in byte_tensors:
-            try:
-                d = decode_jpeg(jb, device=device)
-            except RuntimeError:
-                d = decode_jpeg(jb, device=cpu)
-                d = d.to(device, non_blocking=True)
-            if isinstance(d, (list, tuple)):
-                decoded.extend(d)
-            else:
-                decoded.append(d)
+            decoded.append(_decode_one_jpeg_bytes_to_chw_cuda(jb, device, cpu))
         return decoded
 
 
