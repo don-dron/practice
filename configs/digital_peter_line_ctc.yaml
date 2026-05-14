@@ -11,6 +11,7 @@ project:
   device: "cuda"
 
 training:
+  epochs: 2
   experiment_name: "dpeter_crnn_ctc"
   checkpoint_dir: "training/checkpoints"
 

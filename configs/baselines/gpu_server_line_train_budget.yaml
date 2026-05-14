@@ -11,7 +11,7 @@ data:
 
 training:
   batch_size: 1728
-  epochs: 5
+  epochs: 2
   lr: 0.05
 
 model:

@@ -45,7 +45,7 @@ training:
   hardware_utilization: normal
   main_torch_threads: 2
   batch_size: 1
-  epochs: 1
+  epochs: 2
   gradient_accumulation_steps: 16
   lr: 0.05
   weight_decay: 0.0

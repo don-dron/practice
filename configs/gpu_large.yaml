@@ -3,6 +3,7 @@
 # Подстраивайте batch_size под вашу карту и data.num_workers.
 
 training:
+  epochs: 2
   hardware_utilization: max
   main_torch_threads: null
   batch_size: 128

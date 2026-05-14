@@ -31,20 +31,20 @@ scripts\unzip_datasets.cmd
 
 ```bash
 python -m pip install -e .
-htr-train --config configs/default.yaml --epochs 60 --device cpu
+htr-train --config configs/default.yaml --epochs 2 --device cpu
 htr-infer --checkpoint training/checkpoints/latest.pt path/to/crop_line.png
 ```
 
 Дополнительный YAML — другая архитектура или гиперпараметры; пути к данным во втором файле проверяйте перед запуском:
 
 ```bash
-htr-train --config configs/default.yaml --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml --epochs 60 --device cpu
+htr-train --config configs/default.yaml --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml --epochs 2 --device cpu
 ```
 
 Без установки editable (пример только Yenisei):
 
 ```bash
-PYTHONPATH=src python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs/default.yaml --epochs 60 --device cpu
+PYTHONPATH=src python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs/default.yaml --epochs 2 --device cpu
 PYTHONPATH=src python -m htr.cli infer_main --checkpoint training/checkpoints/latest.pt path/to/crop_line.png
 ```
 
