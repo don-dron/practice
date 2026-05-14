@@ -47,16 +47,16 @@ pip install -e .
 
 Вариант A — если команда htr-train появилась после pip install (предпочтительно):
 
-htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 60
+htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda
 
 Вариант B — без установки editable, из корня репозитория (cmd), с PYTHONPATH:
 
 set PYTHONPATH=%CD%\src
-python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 60
+python -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda
 
 Вариант C — полный путь к Launcher в venv (если activate не добавил Scripts в PATH):
 
-.\.venv\Scripts\htr-train.exe --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda --epochs 60
+.\.venv\Scripts\htr-train.exe --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml --device cuda
 
 Чекпоинты по умолчанию: training\checkpoints\latest.pt
 
@@ -87,10 +87,9 @@ htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crn
 7) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
 ==================================================================
 Ниже — те же связки, что в п. 5.1.2 и блоке команд там; при желании добавьте
-единые параметры в конец каждой строки при необходимости:  --epochs 60 --device cuda  (пропускная способность: цель быстрее кормить GPU — в ``default.yaml`` больше ``num_workers``/``batch``, DataLoader с ``persistent_workers`` и ``prefetch_factor``, AMP и TF32; при полной занятости GPU низкая средняя загрузка CPU нормальна; без потолка воркеров на Win: ``set HTR_WIN_MAX_NUM_WORKERS=0``; при OOM уменьшить ``batch_size``).
-Обучаемые связки T0–E2 и профили регистра S2–S5 (добавьте префиксы `--device cuda` и нужные `--epochs`, `--batch-size`):
+единые параметры в конец каждой строки при необходимости: `--epochs N` (в YAML сейчас 5 для коротких прогонов), `--device cuda`, `--batch-size` … (пропускная способность: цель быстрее кормить GPU — в ``default.yaml`` больше ``num_workers``/``batch``, DataLoader с ``persistent_workers`` и ``prefetch_factor``, AMP и TF32; при полной занятости GPU низкая средняя загрузка CPU нормальна; без потолка воркеров на Win: ``set HTR_WIN_MAX_NUM_WORKERS=0``; при OOM уменьшить ``batch_size``).
 
-htr-train --config configs\default.yaml
+Обучаемые связки T0–E2 и профили регистра S2–S5 (префикс `--device cuda` и при необходимости `--epochs` / `--batch-size`):htr-train --config configs\default.yaml
 
 htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml
 
