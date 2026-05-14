@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Union, cast
 
 import torch
 import torch.nn.functional as F
@@ -32,20 +32,31 @@ def finalize_line_batch_cuda(
     padded = batch["image_u8"]
     h = batch["crop_h"].to(device, non_blocking=True)
     w = batch["crop_w"].to(device, non_blocking=True)
-    kind = batch[U8_KIND_KEY]
+    kind_raw = batch[U8_KIND_KEY]
     texts: List[str] = batch["text"]  # type: ignore[assignment]
 
-    if kind not in (U8_KIND_COCO_CROP, U8_KIND_PAGE_READY):
-        raise ValueError(f"неизвестный u8_kind={kind!r}")
-
     bsz = int(padded.shape[0])
+    if isinstance(kind_raw, (list, tuple)):
+        kinds: List[str] = [str(x) for x in cast(Sequence[object], kind_raw)]
+        if len(kinds) != bsz:
+            raise ValueError(f"u8_kind: ожидалось {bsz} меток, получено {len(kinds)}")
+    else:
+        k0 = str(kind_raw)
+        if k0 not in (U8_KIND_COCO_CROP, U8_KIND_PAGE_READY):
+            raise ValueError(f"неизвестный u8_kind={k0!r}")
+        kinds = [k0] * bsz
+
+    for ki in kinds:
+        if ki not in (U8_KIND_COCO_CROP, U8_KIND_PAGE_READY):
+            raise ValueError(f"неизвестный u8_kind={ki!r}")
+
     out_slices: List[torch.Tensor] = []
     new_ws: List[int] = []
     for i in range(bsz):
         hi = int(h[i].item())
         wi = int(w[i].item())
         sl = padded[i : i + 1, :, :hi, :wi].to(device, non_blocking=True).float().div_(255.0)
-        if kind == U8_KIND_COCO_CROP:
+        if kinds[i] == U8_KIND_COCO_CROP:
             new_w = max(1, round(float(wi) * float(img_height) / float(max(hi, 1))))
             if max_width is not None:
                 new_w = min(new_w, int(max_width))
@@ -69,8 +80,11 @@ def finalize_line_batch_cuda(
     return {"image": images, "text": texts, "seq_width": seq_width}
 
 
-def coco_collate_mixed_lines(batch: List[dict]) -> Dict[str, Union[torch.Tensor, List[str], List[str]]]:
-    """Поддерживает элементы coco (u8 bbox-crop) и page_txt (u8 уже по высоте), без смешения режимов в одном батче."""
+def coco_collate_mixed_lines(batch: List[dict]) -> Dict[str, Union[torch.Tensor, List[str], str]]:
+    """Поддерживает элементы coco (u8 bbox-crop) и page_txt (u8 уже по высоте).
+
+    ConcatDataset + shuffle смешивают источники в одном батче — для каждой строки свой u8_kind (или одна строка, если все одного типа).
+    """
     from htr.data.coco_lines import coco_collate_fn
 
     modes = [str(b.get(LINE_PREP_KEY, LINE_PREP_TENSOR)) for b in batch]
@@ -82,8 +96,9 @@ def coco_collate_mixed_lines(batch: List[dict]) -> Dict[str, Union[torch.Tensor,
         return coco_collate_fn(batch)
 
     kinds = [str(b[U8_KIND_KEY]) for b in batch]
-    if any(k != kinds[0] for k in kinds):
-        raise RuntimeError("в одном батче смешаны u8_kind coco_crop и page_ready")
+    for k in kinds:
+        if k not in (U8_KIND_COCO_CROP, U8_KIND_PAGE_READY):
+            raise ValueError(f"неизвестный u8_kind={k!r}")
 
     texts = [b["text"] for b in batch]  # type: ignore[list-item]
     u8_tensors = [b["image_u8"] for b in batch]  # CHW uint8
@@ -97,12 +112,14 @@ def coco_collate_mixed_lines(batch: List[dict]) -> Dict[str, Union[torch.Tensor,
         _, th, tw = t.shape
         out[i, :, :th, :tw] = t
 
+    kind_field: Union[str, List[str]] = kinds[0] if all(x == kinds[0] for x in kinds) else kinds
+
     return {
         LINE_PREP_KEY: LINE_PREP_UINT8,
         "image_u8": out,
         "crop_h": hs,
         "crop_w": ws,
-        "u8_kind": kinds[0],
+        "u8_kind": kind_field,
         "text": texts,
     }
 
