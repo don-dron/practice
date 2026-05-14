@@ -70,7 +70,7 @@ training:
   hardware_utilization: max
   # Дефолт под меньше OOM: batch↓, JPEG decode не в воркерах CUDA, без async prefetch. Для скорости на большой карте — поднимите.
   batch_size: 256
-  epochs: 20
+  epochs: 5
   # lr = 0.01 (одна сотая); при нестабильном loss уменьшите.
   lr: 0.01
   weight_decay: 0.0
