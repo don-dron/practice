@@ -39,6 +39,9 @@ data:
   # Внутри каждого воркера ограничить PyTorch/OpenMP (иначе num_workers × десятки потоков забьют CPU, GPU ждёт батч).
   # 0 — не трогать (старое поведение).
   dataloader_worker_torch_threads: 1
+  # Только Windows: временно быстрее подача батча (кап воркеров 8, prefetch до 8, persistent_workers). Или: set HTR_WIN_DATALOADER_FAST=1
+  # Риск снова увидеть 1455 — тогда false / убрать env, либо num_workers: 0.
+  windows_dataloader_fast: false
 
   augmentation_train: false
   prefetch_factor: 8

@@ -87,7 +87,7 @@ htr-train --config configs\default.yaml --config configs\baselines\4_01_line_crn
 7) Полный регистр §5.1 + CUDA — все указанные в отчёте цепочки YAML
 ==================================================================
 Ниже — те же связки, что в п. 5.1.2 и блоке команд там.
-При ``RuntimeError`` с ``shared file mapping`` / код **1455**: в YAML поставьте ``data.num_workers: 0`` (самый надёжный вариант на Windows) или оставьте кап по умолчанию (**4** воркера); поднять потолок: ``set HTR_WIN_MAX_NUM_WORKERS=8``, полностью снять кап: ``set HTR_WIN_MAX_NUM_WORKERS=0`` (риск повторения 1455). На Windows в коде отключён ``persistent_workers``, ``prefetch_factor`` не выше 4.
+При ``RuntimeError`` с ``shared file mapping`` / код **1455**: в YAML поставьте ``data.num_workers: 0`` (самый надёжный вариант на Windows) или оставьте кап по умолчанию (**4** воркера); временно быстрее без снятия капа: ``set HTR_WIN_DATALOADER_FAST=1`` или ``windows_dataloader_fast: true`` в YAML (**кап 8** воркеров + prefetch до 8 + persistent_workers; риск 1455). Поднять свой потолок: ``set HTR_WIN_MAX_NUM_WORKERS=8``, полностью снять кап: ``set HTR_WIN_MAX_NUM_WORKERS=0`` (высокий риск 1455). На Windows без fast-режима отключён ``persistent_workers``, ``prefetch_factor`` не выше 4.
 
 Обучаемые связки T0–E2 и профили регистра S2–S5 (префикс ``--device cuda`` и при необходимости ``--epochs`` / ``--batch-size``):
 

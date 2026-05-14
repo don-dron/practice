@@ -320,6 +320,14 @@ def _parse_dataloader_worker_torch_threads(dc: dict) -> int:
         return 1
 
 
+def _windows_dataloader_fast(dc: dict) -> bool:
+    """Временно агрессивнее workers/prefetch на Windows (риск ошибки 1455). YAML или env."""
+    ev = os.environ.get("HTR_WIN_DATALOADER_FAST", "").strip().lower()
+    if ev in ("1", "true", "yes"):
+        return True
+    return bool(dc.get("windows_dataloader_fast", False))
+
+
 def _dataload_worker_count(dc: dict) -> int:
     nw_requested = int(dc.get("num_workers", 0))
     nw = max(0, nw_requested)
@@ -327,7 +335,8 @@ def _dataload_worker_count(dc: dict) -> int:
         _cap_raw = os.environ.get("HTR_WIN_MAX_NUM_WORKERS", "").strip()
         if _cap_raw != "0":
             # Много воркеров + spawn + крупные батчи часто даёт RuntimeError 1455 (shared file mapping).
-            _cap = 4
+            fast = _windows_dataloader_fast(dc)
+            _cap = 8 if fast else 4
             if _cap_raw != "":
                 try:
                     _cap = max(1, min(32, int(_cap_raw)))
@@ -336,8 +345,8 @@ def _dataload_worker_count(dc: dict) -> int:
             if nw > _cap:
                 print(
                     f"[htr-train] num_workers: YAML asked {nw}, capping at {_cap} on Windows "
-                    f"(избегает 1455/shared file mapping; без капа: HTR_WIN_MAX_NUM_WORKERS=0; свой потолок: =N; "
-                    f"или data.num_workers: 0 для стабильности)"
+                    f"(избегает 1455; быстрый режим: windows_dataloader_fast / HTR_WIN_DATALOADER_FAST=1 кап↑8; "
+                    f"HTR_WIN_MAX_NUM_WORKERS=N; без капа: =0; стабильно: num_workers 0)"
                 )
                 nw = _cap
     return nw
@@ -568,6 +577,13 @@ def run_training(cfg: dict) -> None:
     wt_threads = _parse_dataloader_worker_torch_threads(dc)
     worker_init_fn = _DataloaderWorkerTorchThreadsInit(wt_threads) if nw > 0 and wt_threads > 0 else None
 
+    win_fast = _windows_dataloader_fast(dc) if sys.platform == "win32" else False
+    if win_fast and nw > 0:
+        print(
+            "[htr-train] Windows fast DataLoader: windows_dataloader_fast / HTR_WIN_DATALOADER_FAST=1 "
+            "(до 8 workers, prefetch до 8, persistent_workers; возможен повтор 1455 — тогда выключите или num_workers 0)."
+        )
+
     _pin_memory = torch.cuda.is_available()
     _dl_common: dict = {
         "num_workers": nw,
@@ -577,15 +593,17 @@ def run_training(cfg: dict) -> None:
     if worker_init_fn is not None:
         _dl_common["worker_init_fn"] = worker_init_fn
     if nw > 0:
-        # Windows spawn + shared tensors: persistent_workers усиливает риск ERROR_NO_SYSTEM_RESOURCES (1455).
+        # Windows spawn + shared tensors: без fast-режима persistent_workers усиливает риск 1455.
         if sys.platform != "win32":
+            _dl_common["persistent_workers"] = True
+        elif win_fast:
             _dl_common["persistent_workers"] = True
         try:
             _pf = max(2, min(16, int(dc.get("prefetch_factor", 4))))
         except (TypeError, ValueError):
             _pf = 4
         if sys.platform == "win32":
-            _pf = min(_pf, 4)
+            _pf = min(_pf, 8 if win_fast else 4)
         _dl_common["prefetch_factor"] = _pf
 
     loader_train = DataLoader(train_ds, shuffle=True, batch_size=bs, **_dl_common)
@@ -601,7 +619,7 @@ def run_training(cfg: dict) -> None:
     device = torch.device(resolved)
 
     if nw > 0:
-        _persist = sys.platform != "win32"
+        _persist = (sys.platform != "win32") or win_fast
         print(
             f"[htr-train] dataloader workers={nw} prefetch_factor={_dl_common.get('prefetch_factor')} "
             f"persistent_workers={_persist} dataloader_worker_torch_threads="
