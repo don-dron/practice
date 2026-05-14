@@ -23,6 +23,11 @@ class Subset(Dataset[T_co]):
 
 
 def random_split_indices(n: int, val_fraction: float, seed: int) -> tuple[list[int], list[int]]:
+    """val_fraction <= 0 — вся выборка на train, val пустой (быстрее эпоха, без метрики val)."""
+    if n == 0:
+        return [], []
+    if val_fraction <= 0.0:
+        return list(range(n)), []
     rng = random.Random(seed)
     idx = list(range(n))
     rng.shuffle(idx)

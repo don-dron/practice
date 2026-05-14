@@ -1122,7 +1122,10 @@ def run_training(cfg: dict) -> None:
         model.eval()
         with torch.no_grad():
             if not val_ix:
-                print(f"[epoch {epoch}] train_loss={mean_train:.4f} (val: пусто val_fraction)")
+                print(
+                    f"[epoch {epoch}] train_loss={mean_train:.4f} "
+                    f"(val: пропущен — data.val_fraction<=0 или пустой hold-out)"
+                )
             else:
                 for vb_i, vbatch in enumerate(tqdm(loader_val, desc=f"val {epoch}", leave=False)):
                     if val_max_batches is not None and vb_i >= val_max_batches:
