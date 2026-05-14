@@ -1,6 +1,5 @@
-# §4.1 — строковое распознавание по вырезанной строке: CNN + BiLSTM + CTC на Digital Peter.
-# Рабочий профиль (обучение запускается).
-# Цепочка: --config configs/default.yaml --config configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml
+# §4.1 — строковое распознавание CNN+BiLSTM+CTC; данные те же что в default (Yenisei). Бюджет batch/VRAM — из default.yaml.
+# Кластер: добавьте -c configs/baselines/gpu_server_line_train_budget.yaml
 
 methodology_profile:
   report_section: "4.1"
@@ -11,25 +10,7 @@ project:
   seed: 42
   device: "cuda"
 
-data:
-  kind: coco_lines
-  coco_json: "data/yenisei_gov_reports_td/train.json"
-  image_root: "data/yenisei_gov_reports_td/train_images"
-  text_field: "transcription"
-  img_height: 32
-  max_width: 900
-  val_fraction: 0.03
-  num_workers: 96
-  augmentation_train: false
-
-model:
-  name: crnn_ctc
-  lstm_hidden: 256
-
 training:
-  batch_size: 1728
-  epochs: 5
-  lr: 0.05
   experiment_name: "dpeter_crnn_ctc"
   checkpoint_dir: "training/checkpoints"
 

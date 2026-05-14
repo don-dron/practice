@@ -1,5 +1,5 @@
-# Ранее — Digital Peter; по умолчанию сейчас Yenisei (train.json + train_images). Для Peter: coco_json/images + text_field translation.
-# Канонический путь к профилю §4.1 — configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml .
+# См. методологический профиль §4.1 и configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml .
+# Серверный бюджет: configs/baselines/gpu_server_line_train_budget.yaml после этой цепочки.
 
 methodology_profile:
   report_section: "4.1"
@@ -10,25 +10,7 @@ project:
   seed: 42
   device: "cuda"
 
-data:
-  kind: coco_lines
-  coco_json: "data/yenisei_gov_reports_td/train.json"
-  image_root: "data/yenisei_gov_reports_td/train_images"
-  text_field: "transcription"
-  img_height: 32
-  max_width: 900
-  val_fraction: 0.03
-  num_workers: 96
-  augmentation_train: false
-
-model:
-  name: crnn_ctc
-  lstm_hidden: 256
-
 training:
-  batch_size: 1728
-  epochs: 5
-  lr: 0.05
   experiment_name: "dpeter_crnn_ctc"
   checkpoint_dir: "training/checkpoints"
 

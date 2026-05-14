@@ -1,11 +1,11 @@
-# §4.2 — строковый энкодер–декодер с механизмом внимания (реализован как CNN+BiLSTM + декодер с additive attention).
-# Параметры batch/decoder ниже — ориентир на ~8 ГБ VRAM; для кластера поднимите batch_size, num_workers, decoder_max_steps.
+# §4.2 — attention_line_seq2seq (teacher forcing CE). Память: batch/max_width совпадают с default если не переопределить.
+# Сервер: поднимите training.batch_size, data.max_width, model.lstm_* в отдельном overlay.
 
 methodology_profile:
   report_section: "4.2"
   short_name: line_attention_decoder
   status: implemented
-  note: model.name attention_line_seq2seq; цель обучения training.objective attention_ce (teacher forcing CE).
+  note: model.name attention_line_seq2seq; training.objective attention_ce .
 
 planned_model:
   arch: convolutional_encoder_bilstm_or_transformer_slices_tbd
@@ -23,7 +23,6 @@ data:
   image_root: "data/yenisei_gov_reports_td/train_images"
   text_field: "transcription"
   img_height: 32
-  max_width: 768
   val_fraction: 0.03
   num_workers: 0
   augmentation_train: false
@@ -35,9 +34,9 @@ model:
 
 training:
   objective: attention_ce
-  decoder_max_steps: 192
-  attention_loss_microbatch: 3
-  batch_size: 6
+  decoder_max_steps: 160
+  attention_loss_microbatch: 1
+  batch_size: 1
   epochs: 5
   lr: 0.05
   experiment_name: "line_attention_section42"

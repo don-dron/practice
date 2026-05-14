@@ -1,10 +1,11 @@
-# §4.5 — дообучение строкового распознавателя поверх кодировочной части ResNet-18 из ImageNet (упрощённый stem под низкий H=32).
+# §4.5 — pretrained_resnet_line_ctc. Бэкенд ResNet занимает VRAM даже при batch 1 — на очень малой карте возможен OOM без gpu_large/cpu.
+# Кластер: поднимите batch_size и см. другие overlays.
 
 methodology_profile:
   report_section: "4.5"
   short_name: transfer_pretrained_resnet18_then_line_ctc
   status: implemented
-  note: Весов ImageNet в первых слоях ResNet через torchvision; см. pretrained_resnet_line_ctc и freeze_encoder_until_epoch.
+  note: freeze_encoder_until_epoch в training см. train.py .
 
 planned_transfer_policy:
   backbone_checkpoint_or_url: ""
@@ -23,9 +24,8 @@ data:
   image_root: "data/yenisei_gov_reports_td/train_images"
   text_field: "transcription"
   img_height: 32
-  max_width: 900
   val_fraction: 0.03
-  num_workers: 96
+  num_workers: 0
   augmentation_train: false
 
 model:
@@ -34,7 +34,7 @@ model:
 
 training:
   objective: ctc
-  batch_size: 396
+  batch_size: 1
   epochs: 5
   lr: 0.05
   experiment_name: "pretrained_backbone_section45"

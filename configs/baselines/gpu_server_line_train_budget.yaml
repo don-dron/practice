@@ -1,0 +1,18 @@
+# Реплика большого бюджета на кластере (много VRAM/RAM за DataLoader): подмешивается ПОСЛЕ методологических YAML.
+#   htr-train -c configs/default.yaml -c configs/baselines/4_01_line_crnn_ctc_digital_peter.yaml \
+#           -c configs/baselines/gpu_server_line_train_budget.yaml
+#
+# По смыслу — прежнее содержимое overlay_comparable_line_budget + большие списки num_workers/max_width/training.batch.
+
+data:
+  max_width: 900
+  val_fraction: 0.03
+  num_workers: 96
+
+training:
+  batch_size: 1728
+  epochs: 5
+  lr: 0.05
+
+model:
+  lstm_hidden: 256
