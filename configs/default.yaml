@@ -65,6 +65,7 @@ model:
 training:
   # normal | max | low — по умолчанию max: авто main/interop/OMP, prefetch/worker threads auto; для слабой машины: normal
   hardware_utilization: max
+  # На Google Colab см. оверлей configs/colab.yaml — меньший batch (default здесь под мощный сервер).
   batch_size: 1728
   epochs: 20
   lr: 0.0005

@@ -1,0 +1,19 @@
+# Google Colab: мало vCPU и медленный диск относительно default (batch 1728 под сервер с десятками ядер).
+# Типичная «медленная эпоха» — не GPU, а декод JPEG + запись preprocessed_cache + коллейт большого батча.
+#
+#   htr-train --config configs/default.yaml --config configs/colab.yaml
+#
+# Дополнительно: данные в /content/... (не Google Drive), пока кэш не заполнен — первая эпоха дольше.
+# Воркеры: export HTR_COLAB_NUM_WORKERS=6 (или 8), если хватает RAM.
+
+training:
+  # Меньший батч → короче wall-clock на один шаг DataLoader; итераций в эпохе больше, но суммарно обычно быстрее.
+  batch_size: 512
+  # Линейное масштабирование lr от default 0.0005 @ 1728 (при расхождении loss — подстройте вручную)
+  lr: 0.000148
+  # Меньше конкуренции main-thread torch с воркерами Colab (~12 потоков)
+  hardware_utilization: normal
+  main_torch_threads: 2
+
+data:
+  preprocessed_ram_cache_max_gb: 3

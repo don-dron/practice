@@ -658,6 +658,11 @@ def run_training(cfg: dict) -> None:
 
     win_fast = _windows_dataloader_fast(dc) if sys.platform == "win32" else False
     colab_rt = _google_colab_runtime()
+    if colab_rt and bs >= 768:
+        print(
+            "[htr-train] Colab: большой training.batch_size — узкое место чаще CPU/диск (JPEG + кэш .pt), не GPU. "
+            "Часто быстрее по wall-clock: второй конфиг `configs/colab.yaml` (меньший batch, lr) или уменьшите batch_size."
+        )
 
     worker_init_fn = _DataloaderWorkerTorchThreadsInit(wt_threads) if nw > 0 and wt_threads > 0 else None
 
