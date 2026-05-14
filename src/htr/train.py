@@ -495,6 +495,16 @@ def _disk_cache_root_for_source(dc: dict, entry: dict, n_sources: int) -> Option
     return str(base / (ns or slug))
 
 
+def _try_set_multiprocessing_spawn_for_dataloader() -> None:
+    """Linux по умолчанию fork — collate с .to(cuda) в воркере падает после CUDA в родителе. Spawn — отдельные процессы."""
+    import multiprocessing as mp
+
+    try:
+        mp.set_start_method("spawn")
+    except RuntimeError:
+        pass
+
+
 def _datasets_with_augment_backend(ds: torch.utils.data.Dataset) -> list[torch.utils.data.Dataset]:
     if isinstance(ds, ConcatDataset):
         return [x for x in ds.datasets if hasattr(x, "train_augment")]
@@ -504,6 +514,7 @@ def _datasets_with_augment_backend(ds: torch.utils.data.Dataset) -> list[torch.u
 
 
 def run_training(cfg: dict) -> None:
+    _try_set_multiprocessing_spawn_for_dataloader()
     objective = _training_objective(cfg)
     decoder_cap = _decoder_max_steps(cfg)
     seed = int(cfg["project"]["seed"])

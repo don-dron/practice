@@ -7,6 +7,13 @@ from htr.config import config_paths_from_args, deep_merge, load_yaml
 
 
 def train_main() -> None:
+    import multiprocessing as mp
+
+    try:
+        mp.set_start_method("spawn")
+    except RuntimeError:
+        pass
+
     from htr.train import run_training
 
     parser = argparse.ArgumentParser(description="Обучение строковой модели HTR/OCR.")
