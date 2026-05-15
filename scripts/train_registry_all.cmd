@@ -88,42 +88,50 @@ echo Extra train flags: !ALL!
 echo.
 
 echo ========== T0 ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\T0_latest.pt" >nul
 
 echo ========== E1 ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\E1_latest.pt" >nul
 
 echo ========== E1_star ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\digital_peter_line_ctc.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\digital_peter_line_ctc.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\E1_star_latest.pt" >nul
 
 echo ========== E2 ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\overlay_comparable_line_budget.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\overlay_comparable_line_budget.yaml --config configs\baselines\4_01_line_crnn_ctc_digital_peter.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\E2_latest.pt" >nul
 
 echo ========== S2 ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_02_line_stub_encoder_decoder_attention.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_02_line_stub_encoder_decoder_attention.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\S2_latest.pt" >nul
 
 echo ========== S3 ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_03_line_stub_transformer_encoder_attention.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_03_line_stub_transformer_encoder_attention.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\S3_latest.pt" >nul
 
 echo ========== S4 ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_04_page_stub_detector_then_line.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_04_page_stub_detector_then_line.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\S4_latest.pt" >nul
 
 echo ========== S5 ^(first run may download ResNet weights^) ==========
-"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_05_line_stub_transfer_pretrained_encoder.yaml !ALL!
+del /f /q "%REPO_ROOT%\training\checkpoints\latest.pt" 2>nul
+"!EXE_PY!" -c "import sys; from htr.cli import train_main; sys.argv=['htr-train']+sys.argv[1:]; train_main()" --config configs\default.yaml --config configs\baselines\4_05_line_stub_transfer_pretrained_encoder.yaml !ALL! --config configs\registry_fresh_run.yaml
 if errorlevel 1 goto :err
 copy /Y "%REPO_ROOT%\training\checkpoints\latest.pt" "%SNAP%\S5_latest.pt" >nul
 

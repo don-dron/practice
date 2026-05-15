@@ -1,0 +1,8 @@
+# Только для цепочки регистра §5.1 (scripts/train_registry_all.*):
+# каждая связка — с нуля, без resume с previous latest.pt.
+#
+#   htr-train -c configs/default.yaml -c configs/registry_fresh_run.yaml ...
+
+training:
+  checkpoint_overwrite: true
+  resume_if_checkpoint_exists: false

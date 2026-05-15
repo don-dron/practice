@@ -172,6 +172,17 @@ def _max_named_epoch_ckpt_on_disk(ckpt_dir: Path, experiment: str) -> int:
     return best
 
 
+def _checkpoint_experiment_name(payload: dict) -> Optional[str]:
+    cy = payload.get("config_yaml")
+    if isinstance(cy, dict):
+        tr = cy.get("training")
+        if isinstance(tr, dict):
+            en = tr.get("experiment_name")
+            if isinstance(en, str) and en.strip():
+                return en.strip()
+    return None
+
+
 def _infer_completed_epoch_from_resume(payload: dict, ckpt_src: Path, ckpt_dir: Path, experiment: str) -> int:
     ce = payload.get("completed_epoch")
     if isinstance(ce, int) and ce >= 1:
@@ -208,10 +219,19 @@ def _resume_load_and_start_epoch(
     payload: dict = {}
     src: Optional[Path] = None
     for cand in candidates:
-        if cand.is_file():
-            payload = load_checkpoint(str(cand))
-            src = cand
-            break
+        if not cand.is_file():
+            continue
+        payload = load_checkpoint(str(cand))
+        if cand.name == "latest.pt":
+            ck_exp = _checkpoint_experiment_name(payload)
+            if ck_exp is not None and ck_exp != experiment:
+                print(
+                    f"[htr-train] resume: пропуск {cand.name} — experiment_name {ck_exp!r} "
+                    f"не совпадает с текущим {experiment!r}."
+                )
+                continue
+        src = cand
+        break
 
     if src is None:
         print("[htr-train] resume: чекпоинт не найден — первый запуск с эпохи 1.")
@@ -1361,12 +1381,14 @@ def run_training(cfg: dict) -> None:
                 )
 
     latest_ck = ckpt_dir / "latest.pt"
-    if _should_write_checkpoint(latest_ck, tc):
-        save_checkpoint(
-            str(latest_ck),
-            model.state_dict(),
-            itos=charset.itos,
-            model_name=str(cfg["model"]["name"]),
-            yaml_dump=dict(cfg),
-            completed_epoch=epochs,
-        )
+    exp_latest_ck = ckpt_dir / f"{experiment}_latest.pt"
+    for ck_path in (latest_ck, exp_latest_ck):
+        if _should_write_checkpoint(ck_path, tc):
+            save_checkpoint(
+                str(ck_path),
+                model.state_dict(),
+                itos=charset.itos,
+                model_name=str(cfg["model"]["name"]),
+                yaml_dump=dict(cfg),
+                completed_epoch=epochs,
+            )

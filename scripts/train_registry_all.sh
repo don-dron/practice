@@ -21,13 +21,15 @@ run_train_copy() {
   shift
   echo ""
   echo "========== регистр: $tag =========="
+  # Общий latest.pt иначе подхватывает веса/эпоху предыдущей связки (E1/E2 ≈ T0, S2 не перезаписывается).
+  rm -f "$REPO/training/checkpoints/latest.pt"
   "$PYTHON" -c "
 import sys
 from htr.cli import train_main
 
 sys.argv = ['htr-train'] + sys.argv[1:]
 train_main()
-" "$@"
+" "$@" --config configs/registry_fresh_run.yaml
   local dest="$SNAP_DIR/${tag}_latest.pt"
   cp -f "$REPO/training/checkpoints/latest.pt" "$dest"
   echo "snapshot: $dest"
