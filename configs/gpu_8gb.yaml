@@ -1,0 +1,23 @@
+# NVIDIA ~8 ГБ VRAM: быстрее default без gpu_large (24+ ГБ).
+#
+#   htr-train -c configs/default.yaml -c configs/gpu_8gb.yaml
+#
+# При OOM: batch_size 4 и gradient_accumulation_steps 4, либо data.max_width: 384.
+
+training:
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  amp: true
+  cudnn_enabled: true
+  cudnn_benchmark: true
+  cuda_empty_cache_after_backward: false
+  cuda_empty_cache_after_optimizer_step: false
+  async_training_batch_prefetch: true
+  async_prefetch_queue_size: 2
+  cpu_line_finalize: false
+  cuda_line_resize_on_device: true
+
+data:
+  num_workers: 4
+  prefetch_factor: 4
+  preprocessed_ram_cache_max_gb: 2

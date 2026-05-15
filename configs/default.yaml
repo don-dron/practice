@@ -1,6 +1,7 @@
 # Базовый конфиг проекта (единственный, если вы всегда передаёте только default.yaml).
-# Ориентир: малая VRAM (~4–8 ГБ); при нехватке памяти уменьшайте batch, max_width, или поднимите
-# gradient_accumulation_steps. Большая карта — configs/gpu_large.yaml.
+# Эффективный батч = batch_size × gradient_accumulation_steps (по умолчанию 8×2=16).
+# ~8 ГБ VRAM и долго идёт эпоха: configs/gpu_8gb.yaml (AMP, без empty_cache, RAM-кэш строк).
+# При OOM: batch_size 4, gradient_accumulation_steps 4. 24+ ГБ — configs/gpu_large.yaml.
 project:
   seed: 42
   device: "cuda"  # cuda | cpu | mps
@@ -26,14 +27,14 @@ data:
   line_resize_height_cap_px: 48
   val_fraction: 0
   train_subsample_divisor: 1  # 1 — все строки; N>1 — подвыборка каждой N-й строки
-  num_workers: 0
+  num_workers: 2
   dataloader_worker_torch_threads: auto
   windows_dataloader_fast: false
 
   augmentation_train: false
   prefetch_factor: auto
   preprocessed_cache_dir: "training/preprocessed_cache"
-  preprocessed_ram_cache_max_gb: 0
+  preprocessed_ram_cache_max_gb: 1.5
   extra_chars: ""
 
 model:
@@ -46,9 +47,9 @@ model:
 training:
   hardware_utilization: normal
   main_torch_threads: 2
-  batch_size: 1
+  batch_size: 8
   epochs: 5
-  gradient_accumulation_steps: 16
+  gradient_accumulation_steps: 2
   lr: 0.05
   weight_decay: 0.0
   clip_grad_norm: 5.0
@@ -56,20 +57,20 @@ training:
   experiment_name: "yenisei_gov_reports_td"
   save_every_epochs: 1
   checkpoint_overwrite: false
-  amp: false
+  amp: true
   cuda_jpeg_decode_batched: false
   cuda_line_resize_on_device: false
   cpu_line_finalize: true
-  async_training_batch_prefetch: false
-  async_prefetch_queue_size: 1
+  async_training_batch_prefetch: true
+  async_prefetch_queue_size: 2
   parallel_charset_text_reads: true
 
-  cudnn_enabled: false
-  cudnn_benchmark: false
+  cudnn_enabled: true
+  cudnn_benchmark: true
   allow_tf32: true
 
-  cuda_empty_cache_after_backward: true
-  cuda_empty_cache_after_optimizer_step: true
+  cuda_empty_cache_after_backward: false
+  cuda_empty_cache_after_optimizer_step: false
 
   val_max_batches: 8
   attention_loss_microbatch: null
